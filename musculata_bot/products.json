@@ -1,0 +1,272 @@
+[
+  {
+    "id": 1,
+    "name": "NOW FLAX OIL ORGANIC 1000mg 100 SGELS",
+    "price": 1590,
+    "category": "Жирные кислоты (Омега-3)"
+  },
+  {
+    "id": 2,
+    "name": "Nature Foods PUMP 30 packs",
+    "price": 1340,
+    "category": "Предтренировочные комплексы"
+  },
+  {
+    "id": 3,
+    "name": "БАД Trec Nutrition BOOGIEMAN 300g",
+    "price": 1369,
+    "category": "Предтренировочные комплексы"
+  },
+  {
+    "id": 4,
+    "name": "Maxler Magnesium Glycinate Liquid 25 ml х14 БАД",
+    "price": 1501,
+    "category": "Витамины и минералы"
+  },
+  {
+    "id": 5,
+    "name": "Fitrule Amylopectin 1500g",
+    "price": 702,
+    "category": "Углеводы"
+  },
+  {
+    "id": 6,
+    "name": "БАД Scitec Nutrition Whey Protein Prof. 920g",
+    "price": 2976,
+    "category": "Протеин"
+  },
+  {
+    "id": 7,
+    "name": "Universal Animal Flex (44 packs)",
+    "price": 4290,
+    "category": "Витамины и минералы"
+  },
+  {
+    "id": 8,
+    "name": "Dr.Hoffman Top Whey 908g",
+    "price": 1124,
+    "category": "Протеин"
+  },
+  {
+    "id": 9,
+    "name": "Scitec Nutrition 100% Whey Protein Prof. 1000g",
+    "price": 3365,
+    "category": "Протеин"
+  },
+  {
+    "id": 10,
+    "name": "Scitec Nutrition Whey Protein Prof. 2350g",
+    "price": 6585,
+    "category": "Протеин"
+  },
+  {
+    "id": 11,
+    "name": "Trec Nutrition WHEY 100 900g клубника",
+    "price": 2654,
+    "category": "Протеин"
+  },
+  {
+    "id": 12,
+    "name": "Trec Nutrition WHEY 100 900g шоколад",
+    "price": 2654,
+    "category": "Протеин"
+  },
+  {
+    "id": 13,
+    "name": "Trec Nutrition WHEY 100 900g ваниль",
+    "price": 2654,
+    "category": "Протеин"
+  },
+  {
+    "id": 14,
+    "name": "Trec Nutrition WHEY 100 900g печенье",
+    "price": 2654,
+    "category": "Протеин"
+  },
+  {
+    "id": 15,
+    "name": "Trec Nutrition WHEY 100 2275g клубника",
+    "price": 5305,
+    "category": "Протеин"
+  },
+  {
+    "id": 16,
+    "name": "Trec Nutrition WHEY 100 2275g шоколад",
+    "price": 5305,
+    "category": "Протеин"
+  },
+  {
+    "id": 17,
+    "name": "Trec Nutrition WHEY 100 2275g ваниль",
+    "price": 5305,
+    "category": "Протеин"
+  },
+  {
+    "id": 18,
+    "name": "Trec Nutrition WHEY 100 2275g печенье",
+    "price": 5305,
+    "category": "Протеин"
+  },
+  {
+    "id": 19,
+    "name": "БАД Trec Nutrition CASEIN 100 600g",
+    "price": 2333,
+    "category": "Протеин"
+  },
+  {
+    "id": 20,
+    "name": "Applied Nutrition ISO-XP 850 Gr БАД",
+    "price": 3972,
+    "category": "L-карнитин"
+  },
+  {
+    "id": 21,
+    "name": "Bounty protein Powder 875g",
+    "price": 1853,
+    "category": "Протеин"
+  },
+  {
+    "id": 22,
+    "name": "Nature Foods Creatine 200g (порошок)",
+    "price": 1416,
+    "category": "Креатин"
+  },
+  {
+    "id": 23,
+    "name": "Nature Foods Creatine Hydrochloride 90 caps",
+    "price": 765,
+    "category": "Креатин"
+  },
+  {
+    "id": 24,
+    "name": "Optimum Nutrition Creatine 2500 mg 100 caps",
+    "price": 3191,
+    "category": "Креатин"
+  },
+  {
+    "id": 25,
+    "name": "Optimum Nutrition Creatine 2500 mg 200 caps",
+    "price": 4538,
+    "category": "Креатин"
+  },
+  {
+    "id": 26,
+    "name": "Maxler Krealkalyn 120 caps БАД",
+    "price": 2209,
+    "category": "Креатин"
+  },
+  {
+    "id": 27,
+    "name": "Reckful ® L-Glutamine 240g",
+    "price": 650,
+    "category": "Аминокислоты"
+  },
+  {
+    "id": 28,
+    "name": "Mutant L-Glutamine 300g",
+    "price": 1680,
+    "category": "Креатин"
+  },
+  {
+    "id": 29,
+    "name": "Nature Foods ZMA+B6 100 caps",
+    "price": 450,
+    "category": "Витамины и минералы"
+  },
+  {
+    "id": 30,
+    "name": "Nature Foods Zinc Picolinate 60 caps",
+    "price": 405,
+    "category": "Витамины и минералы"
+  },
+  {
+    "id": 31,
+    "name": "Nature Foods Zinc Citrate+Vitamin С 100 caps",
+    "price": 396,
+    "category": "Витамины и минералы"
+  },
+  {
+    "id": 32,
+    "name": "Nature Foods Beta Alanine 90 caps",
+    "price": 495,
+    "category": "Аминокислоты"
+  },
+  {
+    "id": 33,
+    "name": "Nature Foods Citrulline Malate 90 caps",
+    "price": 405,
+    "category": "Аминокислоты"
+  },
+  {
+    "id": 34,
+    "name": "Nature Foods Citrulline Malate 200g (порошок)",
+    "price": 585,
+    "category": "Аминокислоты"
+  },
+  {
+    "id": 35,
+    "name": "Nature Foods AAKG Powder 200g",
+    "price": 720,
+    "category": "Аминокислоты"
+  },
+  {
+    "id": 36,
+    "name": "Optimum Nutrition 100% Whey Gold standard 5lb",
+    "price": 11883,
+    "category": "Аминокислоты"
+  },
+  {
+    "id": 37,
+    "name": "Mutant Whey 10lb",
+    "price": 11333,
+    "category": "Протеин"
+  },
+  {
+    "id": 38,
+    "name": "Mutant PRO 2lb",
+    "price": 3423,
+    "category": "Протеин"
+  },
+  {
+    "id": 39,
+    "name": "Mutant PRO 5lb",
+    "price": 6133,
+    "category": "Протеин"
+  },
+  {
+    "id": 40,
+    "name": "Mutant GEAAR 14.8унции",
+    "price": 2008,
+    "category": "Гейнеры"
+  },
+  {
+    "id": 41,
+    "name": "2SN Gainer 5000g W/O",
+    "price": 2880,
+    "category": "Гейнеры"
+  },
+  {
+    "id": 42,
+    "name": "БАД Applied Nutrition Critical Mass Prof. 2.4kg (Клубника)",
+    "price": 3320,
+    "category": "Гейнеры"
+  },
+  {
+    "id": 43,
+    "name": "БАД Applied Nutrition Critical Mass Prof. 2.4kg (Ваниль)",
+    "price": 3320,
+    "category": "Гейнеры"
+  },
+  {
+    "id": 44,
+    "name": "БАД Applied Nutrition Critical Mass Prof. 2.4kg (Шоколад",
+    "price": 3320,
+    "category": "Гейнеры"
+  },
+  {
+    "id": 45,
+    "name": "БАД Trec Nutrition CREATINE 100% 300g",
+    "price": 790,
+    "category": "Креатин"
+  }
+]
