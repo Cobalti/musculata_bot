@@ -18,6 +18,8 @@ from errors import safe_handler
 from checkout import price_breakdown
 from integrations import create_order
 import orders_db
+import emoji_ui
+import emoji_ids
 
 logger = logging.getLogger("main")
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -378,17 +380,34 @@ def handle_checkout(call):
         "только на доступные позиции.\n\n"
         if missing_reported else ""
     )
+    text = f"{warning}✅ Заказ #{order_id} сформирован!\n\nНажми кнопку ниже, чтобы завершить оплату на сайте."
 
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("💳 Перейти к оплате", url=checkout_url))
+    # Кнопка оплаты — самое важное место, чтобы визуально выделить (зелёная,
+    # style="success") и добавить фирменный эмодзи. Это возможно только через
+    # прямой вызов Bot API (emoji_ui.py) — pyTelegramBotAPI пока не поддерживает
+    # style/icon_custom_emoji_id (см. комментарии в emoji_ui.py).
+    # Если ID эмодзи ещё не заполнен в emoji_ids.py — отправляем обычной
+    # кнопкой через стандартный bot.send_message, чтобы не сломать checkout.
+    sent_via_emoji_ui = False
+    if emoji_ids.CHECK:
+        try:
+            button = emoji_ui.build_emoji_button(
+                "Перейти к оплате", url=checkout_url,
+                style="success", icon_custom_emoji_id=emoji_ids.CHECK,
+            )
+            keyboard = emoji_ui.build_emoji_keyboard([[button]])
+            result = emoji_ui.send_message_with_emoji(call.message.chat.id, text, reply_markup=keyboard)
+            if result.get("ok"):
+                sent_via_emoji_ui = True
+                state.set_content(user_id, result["result"]["message_id"])
+        except Exception as e:
+            logger.warning("Не удалось отправить стилизованную кнопку оплаты, фолбэк на обычную: %s", e)
 
-    show_content(
-        call.message.chat.id,
-        user_id,
-        f"{warning}✅ Заказ #{order_id} сформирован!\n\n"
-        f"Нажми кнопку ниже, чтобы завершить оплату на сайте.",
-        reply_markup=markup,
-    )
+    if not sent_via_emoji_ui:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("💳 Перейти к оплате", url=checkout_url))
+        show_content(call.message.chat.id, user_id, text, reply_markup=markup)
+
     bot.answer_callback_query(call.id)
 
     # Корзину чистим сразу после успешного создания заказа на сайте —
