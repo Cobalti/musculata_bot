@@ -15,7 +15,9 @@ import analytics
 from legal import CONSENT_TEXT
 from notifier import notify_admin
 from errors import safe_handler
-from checkout import build_checkout_url, price_breakdown
+from checkout import price_breakdown
+from integrations import create_order
+import orders_db
 
 logger = logging.getLogger("main")
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -318,29 +320,81 @@ def handle_remove_item(call):
 @bot.callback_query_handler(func=lambda c: c.data == "checkout")
 @safe_handler(bot)
 def handle_checkout(call):
+    """
+    Оформление заказа через реальную интеграцию с сайтом (integrations.py).
+
+    Раньше здесь была локальная генерация условной ссылки
+    (build_checkout_url) — теперь бот действительно отправляет корзину
+    на сайт Фёдора, получает order_id и готовую ссылку на оплату.
+
+    ВАЖНО: пока Фёдор не пришлёт X_BOT_TOKEN, эта функция технически
+    рабочая, но реальный запрос будет падать с ошибкой — это ожидаемо,
+    интеграция не активна до получения токена (см. integrations.py).
+    """
     user_id = call.from_user.id
-    url = build_checkout_url(user_id)
-    if not url:
+    user_cart = cart.get_cart(user_id)
+
+    if not user_cart:
         bot.answer_callback_query(call.id, "Корзина пуста")
         return
 
-    subtotal, discount_amount, final_total = price_breakdown(user_id)
-    analytics.log_event(user_id, call.from_user.username, "checkout", f"{final_total} ₽")
+    items_list = list(user_cart.keys())
+
+    response = create_order(
+        telegram_id=user_id,
+        items=items_list,
+        promotions="TELEGRAM10",
+    )
+
+    if response.get("status") == "error" or not response.get("checkout_url"):
+        analytics.log_event(user_id, call.from_user.username, "checkout_failed", "site error")
+        show_content(
+            call.message.chat.id,
+            user_id,
+            "❌ Не получилось оформить заказ — сайт временно недоступен "
+            "или интеграция ещё не настроена. Попробуй чуть позже, либо "
+            "напиши в поддержку (⚙️ Настройки → Поддержка).",
+        )
+        bot.answer_callback_query(call.id, "Ошибка сервера")
+        return
+
+    order_id = response.get("order_id")
+    checkout_url = response.get("checkout_url")
+    missing_reported = response.get("missing_items_reported", False)
+
+    # Сохраняем заказ в своей БД — это единственное место, где будет
+    # жить история покупок пользователя (личного кабинета на сайте не будет).
+    orders_db.create_order_record(
+        telegram_id=user_id,
+        site_order_id=order_id,
+        checkout_url=checkout_url,
+        items=items_list,
+    )
+
+    analytics.log_event(user_id, call.from_user.username, "checkout", f"Order #{order_id}")
+
+    warning = (
+        "⚠️ Некоторые товары оказались недоступны — счёт сформирован "
+        "только на доступные позиции.\n\n"
+        if missing_reported else ""
+    )
 
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("💳 Перейти к оплате", url=url))
+    markup.add(types.InlineKeyboardButton("💳 Перейти к оплате", url=checkout_url))
 
     show_content(
         call.message.chat.id,
         user_id,
-        f"{cart.cart_text(user_id)}\n\n"
-        f"Сумма без скидки: {subtotal} ₽\n"
-        f"Скидка за использование бота (10%): −{discount_amount} ₽\n"
-        f"💰 Итого к оплате: {final_total} ₽\n\n"
-        f"Нажми кнопку ниже, чтобы завершить оформление на сайте.",
+        f"{warning}✅ Заказ #{order_id} сформирован!\n\n"
+        f"Нажми кнопку ниже, чтобы завершить оплату на сайте.",
         reply_markup=markup,
     )
     bot.answer_callback_query(call.id)
+
+    # Корзину чистим сразу после успешного создания заказа на сайте —
+    # дальнейший статус (оплачен/нет) отслеживается через вебхук
+    # payment-success, который обновит запись в orders_db.
+    cart.clear_cart(user_id)
 
 
 # ---------- Заглушки для будущих разделов ----------
@@ -358,17 +412,44 @@ def handle_invite_stub(message):
     )
 
 
+STATUS_LABELS = {
+    "pending": "⏳ Ожидает оплаты",
+    "paid": "✅ Оплачен",
+    "missing_items": "⚠️ Часть товаров недоступна",
+    "error": "❌ Ошибка оформления",
+}
+
+
 @bot.message_handler(func=lambda m: m.text == keyboards.BTN_ORDERS)
 @safe_handler(bot)
-def handle_orders_stub(message):
+def handle_orders(message):
+    """
+    История заказов пользователя. Живёт только в нашей БД (orders_db),
+    т.к. личного кабинета на сайте не будет — сайт не хранит для нас
+    историю, только сам факт заказа + вебхуки о его статусе.
+    """
     delete_user_message(message)
     state.clear_awaiting_support(message.from_user.id)
-    show_content(
-        message.chat.id,
-        message.from_user.id,
-        "🗡️ История заказов пока пуста — этот раздел требует подключения базы данных "
-        "и появится в следующей версии бота.",
-    )
+    user_id = message.from_user.id
+
+    orders = orders_db.get_user_orders(user_id, limit=10)
+
+    if not orders:
+        show_content(
+            message.chat.id,
+            user_id,
+            "🗡️ У тебя пока нет заказов. Загляни в 📜 Каталог, чтобы выбрать что-нибудь!",
+        )
+        return
+
+    lines = ["🗡️ Твои последние заказы:\n"]
+    for order in orders:
+        status_label = STATUS_LABELS.get(order["status"], order["status"])
+        order_id = order["site_order_id"] or "—"
+        total = f"{order['total']} ₽" if order["total"] else "—"
+        lines.append(f"Заказ #{order_id} · {status_label} · {total}")
+
+    show_content(message.chat.id, user_id, "\n".join(lines))
 
 
 @bot.message_handler(func=lambda m: m.text == keyboards.BTN_ORDER_SUBSCRIPTION)
