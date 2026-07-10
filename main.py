@@ -58,12 +58,15 @@ def delete_user_message(message):
         pass
 
 
-def show_content(chat_id, user_id, text, reply_markup=None):
+def show_content(chat_id, user_id, text, reply_markup=None, parse_mode=None):
     """
     Показывает "экран" (каталог/корзина/заглушка), удаляя предыдущий.
     ВАЖНО: эти сообщения НИКОГДА не несут ReplyKeyboardMarkup — поэтому
     постоянное меню внизу (отправленное один раз при первом /start)
     вообще не затрагивается ни при каких переходах между разделами.
+
+    parse_mode: "HTML" нужен там, где в тексте используются кастомные
+    эмодзи через <tg-emoji emoji-id="...">заглушка</tg-emoji>.
     """
     old_id = state.get_content(user_id)
     if old_id:
@@ -72,7 +75,7 @@ def show_content(chat_id, user_id, text, reply_markup=None):
         except Exception:
             pass
 
-    msg = bot.send_message(chat_id, text, reply_markup=reply_markup)
+    msg = bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
     state.set_content(user_id, msg.message_id)
     return msg
 
@@ -124,10 +127,11 @@ def start_message(message):
 
     menu_msg = bot.send_message(
         message.chat.id,
-        "⚔️ Приветствую, соратник!\n\n"
+        f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji> Приветствую, соратник!\n\n'
         "Перед тобой снаряжение для покорения новых вершин силы.\n"
         "Меню внизу — твой компас, оно всегда под рукой.",
         reply_markup=keyboards.main_menu(),
+        parse_mode="HTML",
     )
     state.set_menu(user_id, menu_msg.message_id)
 
@@ -153,10 +157,11 @@ def handle_consent_accept(call):
     if not state.get_menu(user_id):
         menu_msg = bot.send_message(
             call.message.chat.id,
-            "⚔️ Приветствую, соратник!\n\n"
+            f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji> Приветствую, соратник!\n\n'
             "Перед тобой снаряжение для покорения новых вершин силы.\n"
             "Меню внизу — твой компас, оно всегда под рукой.",
             reply_markup=keyboards.main_menu(),
+            parse_mode="HTML",
         )
         state.set_menu(user_id, menu_msg.message_id)
 
@@ -171,8 +176,9 @@ def handle_catalog_button(message):
     show_content(
         message.chat.id,
         message.from_user.id,
-        "📜 Выбери категорию снаряжения:",
+        f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji> Выбери категорию снаряжения:',
         reply_markup=keyboards.categories_keyboard(),
+        parse_mode="HTML",
     )
 
 
@@ -180,10 +186,11 @@ def handle_catalog_button(message):
 @safe_handler(bot)
 def handle_catlist(call):
     bot.edit_message_text(
-        "📜 Выбери категорию снаряжения:",
+        f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji> Выбери категорию снаряжения:',
         call.message.chat.id,
         call.message.message_id,
         reply_markup=keyboards.categories_keyboard(),
+        parse_mode="HTML",
     )
 
 
@@ -195,7 +202,8 @@ def handle_category_page(call):
     page = int(page)
 
     category_name = category_by_index(cat_idx) if cat_idx != ALL_CATEGORIES else None
-    header = f"📜 Категория: {category_name}" if category_name else "📜 Все товары:"
+    _sc = f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji>'
+    header = f"{_sc} Категория: {category_name}" if category_name else f"{_sc} Все товары:"
 
     if page == 0:
         analytics.log_event(
@@ -213,6 +221,7 @@ def handle_category_page(call):
             call.message.chat.id,
             call.message.message_id,
             reply_markup=keyboards.catalog_page_keyboard(page, call.from_user.id, cat_idx),
+            parse_mode="HTML",
         )
     except Exception:
         try:
@@ -223,6 +232,7 @@ def handle_category_page(call):
             call.message.chat.id,
             header,
             reply_markup=keyboards.catalog_page_keyboard(page, call.from_user.id, cat_idx),
+            parse_mode="HTML",
         )
         state.set_content(call.from_user.id, msg.message_id)
     bot.answer_callback_query(call.id)
@@ -254,12 +264,16 @@ def handle_view_product(call):
     except Exception:
         pass
 
-    caption = f"⚔️ {product['name']}\n💰 Цена: {product['price']} ₽"
+    caption = (
+        f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji> {product["name"]}\n'
+        f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji> Цена: {product["price"]} ₽'
+    )
     with open(PLACEHOLDER_IMAGE_PATH, "rb") as photo:
         msg = bot.send_photo(
             call.message.chat.id,
             photo,
             caption=caption,
+            parse_mode="HTML",
             reply_markup=keyboards.product_card_keyboard(
                 product["id"], int(page), int(cat_idx), call.from_user.id
             ),
@@ -426,8 +440,10 @@ def handle_invite_stub(message):
     show_content(
         message.chat.id,
         message.from_user.id,
-        "⚔️ Реферальная система в разработке. Скоро здесь появится твоя личная ссылка "
-        "для приглашения соратников и бонусы за каждого приведённого воина.",
+        f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji> Реферальная система в разработке. '
+        "Скоро здесь появится твоя личная ссылка для приглашения соратников "
+        "и бонусы за каждого приведённого воина.",
+        parse_mode="HTML",
     )
 
 
@@ -453,22 +469,27 @@ def handle_orders(message):
 
     orders = orders_db.get_user_orders(user_id, limit=10)
 
+    _ghost = f'<tg-emoji emoji-id="{emoji_ids.GHOST}">👻</tg-emoji>'
+    _scroll = f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji>'
+
     if not orders:
         show_content(
             message.chat.id,
             user_id,
-            "🗡️ У тебя пока нет заказов. Загляни в 📜 Каталог, чтобы выбрать что-нибудь!",
+            f"{_ghost} У тебя пока нет заказов. Загляни в {_scroll} Каталог, "
+            "чтобы выбрать что-нибудь!",
+            parse_mode="HTML",
         )
         return
 
-    lines = ["🗡️ Твои последние заказы:\n"]
+    lines = [f"{_ghost} Твои последние заказы:\n"]
     for order in orders:
         status_label = STATUS_LABELS.get(order["status"], order["status"])
         order_id = order["site_order_id"] or "—"
         total = f"{order['total']} ₽" if order["total"] else "—"
         lines.append(f"Заказ #{order_id} · {status_label} · {total}")
 
-    show_content(message.chat.id, user_id, "\n".join(lines))
+    show_content(message.chat.id, user_id, "\n".join(lines), parse_mode="HTML")
 
 
 @bot.message_handler(func=lambda m: m.text == keyboards.BTN_ORDER_SUBSCRIPTION)
@@ -479,8 +500,10 @@ def handle_order_subscription_stub(message):
     show_content(
         message.chat.id,
         message.from_user.id,
-        "🛡️ Вступление в Орден (годовая подписка с поставками раз в 60 дней) "
+        f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji> Вступление в Орден '
+        "(годовая подписка с поставками раз в 60 дней) "
         "требует подключения приёма платежей — раздел в разработке.",
+        parse_mode="HTML",
     )
 
 

@@ -1,16 +1,22 @@
 from telebot import types
 from products import get_page, total_pages, PRODUCTS_BY_ID, CATEGORIES, category_by_index
 from cart import get_cart
+import emoji_ids
+import emoji_ui
 
 # Тексты кнопок главного меню — вынесены в константы,
 # чтобы не разъезжались при сравнении в обработчиках.
-BTN_CATALOG = "📜 Каталог"
-BTN_INVITE = "⚔️ Пригласить"
-BTN_ORDERS = "🗡️ История"
+# ReplyKeyboard (нижняя панель) — стандартные unicode-эмодзи,
+# потому что эти кнопки отправляются через bot.send_message при /start.
+# Кастомные эмодзи на ReplyKeyboard потребуют отдельного прямого API-вызова
+# при следующем рефакторе start_message.
+BTN_CATALOG           = "📜 Каталог"
+BTN_INVITE            = "⚔️ Пригласить"
+BTN_ORDERS            = "🗡️ История"
 BTN_ORDER_SUBSCRIPTION = "🛡️ Орден"
-BTN_SUPPORT = "⚒️ Поддержка"
-BTN_CART = "🛒 Корзина"
-BTN_SETTINGS = "⚙️ Настройки"
+BTN_SUPPORT           = "⚒️ Поддержка"
+BTN_CART              = "🛒 Корзина"
+BTN_SETTINGS          = "⚙️ Настройки"
 
 ALL_CATEGORIES = -1  # спец-значение "показать все товары без фильтра"
 
@@ -121,3 +127,67 @@ def cart_keyboard(user_id: int) -> types.InlineKeyboardMarkup:
     if cart:
         markup.add(types.InlineKeyboardButton("💳 Оформить заказ", callback_data="checkout"))
     return markup
+
+
+# ---------- Кастомные эмодзи через emoji_ui (Bot API 9.4) ----------
+# Эти функции строят клавиатуры-словари (не объекты telebot) для отправки
+# через emoji_ui.send_message_with_emoji() / emoji_ui.build_emoji_keyboard().
+# Используются там, где нужна стилизация: style="success"/"danger"/"primary"
+# и/или фирменный эмодзи на кнопке.
+
+
+def checkout_keyboard_dict(checkout_url: str) -> dict:
+    """
+    Зелёная кнопка оплаты с фирменным 💎 из набора MUSCULATA.
+    Используется в handle_checkout (main.py).
+    """
+    return emoji_ui.build_emoji_keyboard([[
+        emoji_ui.build_emoji_button(
+            "Перейти к оплате",
+            url=checkout_url,
+            style="success",
+            icon_custom_emoji_id=emoji_ids.DIAMOND,
+        )
+    ]])
+
+
+def support_sent_keyboard_dict() -> dict:
+    """
+    Синяя кнопка-подтверждение после отправки вопроса в поддержку.
+    """
+    return emoji_ui.build_emoji_keyboard([[
+        emoji_ui.build_emoji_button(
+            "Вопрос отправлен",
+            callback_data="noop",
+            style="primary",
+            icon_custom_emoji_id=emoji_ids.PENCIL,
+        )
+    ]])
+
+
+def order_paid_keyboard_dict() -> dict:
+    """
+    Зелёная кнопка-квитанция после подтверждения оплаты (вебхук payment-success).
+    """
+    return emoji_ui.build_emoji_keyboard([[
+        emoji_ui.build_emoji_button(
+            "Оплачено ✓",
+            callback_data="noop",
+            style="success",
+            icon_custom_emoji_id=emoji_ids.DIAMOND,
+        )
+    ]])
+
+
+def order_error_keyboard_dict(checkout_url: str) -> dict:
+    """
+    Красная кнопка при ошибке (missing_items или сбой сайта).
+    """
+    return emoji_ui.build_emoji_keyboard([[
+        emoji_ui.build_emoji_button(
+            "Попробовать снова",
+            url=checkout_url,
+            style="danger",
+            icon_custom_emoji_id=emoji_ids.SWORD,
+        )
+    ]])

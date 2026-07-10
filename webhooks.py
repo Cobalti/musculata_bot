@@ -28,6 +28,7 @@ import os
 import hmac
 
 import orders_db
+import emoji_ids
 
 logger = logging.getLogger("webhooks")
 
@@ -55,13 +56,13 @@ def _check_secret(req) -> bool:
     return hmac.compare_digest(incoming, X_WP_SECRET)
 
 
-def _notify(telegram_id: int, text: str):
+def _notify(telegram_id: int, text: str, parse_mode: str | None = None):
     """Отправляет сообщение пользователю, если бот подключён; иначе логирует."""
     if bot is None:
         logger.info("[DRY-RUN] Сообщение для %s: %s", telegram_id, text)
         return
     try:
-        bot.send_message(telegram_id, text)
+        bot.send_message(telegram_id, text, parse_mode=parse_mode)
     except Exception as e:
         logger.error("Не удалось отправить сообщение telegram_id=%s: %s", telegram_id, e)
 
@@ -81,12 +82,13 @@ def missing_items():
 
     ids_str = ", ".join(str(i) for i in missing)
     text = (
-        f"⚠️ К сожалению, некоторых товаров (ID {ids_str}) сейчас нет в наличии.\n"
+        f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji> '
+        f"К сожалению, некоторых товаров (ID {ids_str}) сейчас нет в наличии.\n"
         f"Мы сформировали счёт на доступные позиции."
     )
 
     orders_db.mark_order_missing_items(site_order_id=None, telegram_id=telegram_id, missing_items=missing)
-    _notify(telegram_id, text)
+    _notify(telegram_id, text, parse_mode="HTML")
 
     logger.info("missing-items обработан: telegram_id=%s items=%s", telegram_id, missing)
     return jsonify({"status": "ok"}), 200
@@ -116,8 +118,11 @@ def payment_success():
             order_id, telegram_id,
         )
 
-    text = f"✅ Оплата заказа #{order_id} на сумму {total} ₽ успешно получена! Спасибо за покупку."
-    _notify(telegram_id, text)
+    text = (
+        f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji> '
+        f"Оплата заказа #{order_id} на сумму {total} ₽ успешно получена! Спасибо за покупку."
+    )
+    _notify(telegram_id, text, parse_mode="HTML")
 
     logger.info("payment-success обработан: telegram_id=%s order_id=%s total=%s", telegram_id, order_id, total)
     return jsonify({"status": "ok"}), 200
