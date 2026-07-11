@@ -20,6 +20,7 @@ from integrations import create_order
 import orders_db
 import emoji_ui
 import emoji_ids
+import packs
 
 logger = logging.getLogger("main")
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -192,6 +193,126 @@ def handle_catlist(call):
         reply_markup=keyboards.categories_keyboard(),
         parse_mode="HTML",
     )
+
+
+# ---------- Военные Сундуки (паки) ----------
+# Готовые наборы товаров со скидкой 15%. Данные лежат в packs.py, здесь
+# только показ и добавление в корзину. Пак кладётся в корзину как единая
+# позиция (виртуальный товар с id из диапазона PACK_ID_OFFSET+) —
+# см. packs.pack_as_cart_item и cart._lookup.
+
+
+def _pack_intro_text() -> str:
+    """
+    Общий заголовок над списком паков. Тональность — средневековая,
+    в тон остальному интерфейсу (Орден, соратник, снаряжение).
+    """
+    _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
+    _sword  = f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji>'
+    _diamond= f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
+    return (
+        f"{_shield} <b>Военные Сундуки</b>\n\n"
+        f"{_sword} Готовые наборы снаряжения для соратников любого ранга.\n"
+        f"В каждом — только проверенные бренды из наших складов.\n"
+        f"{_diamond} Забирая сундук целиком, ты экономишь <b>15%</b> "
+        f"против розницы и получаешь позиции, которых нет в обычной "
+        f"лавке.\n\n"
+        f"Выбери свой ранг:"
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "packs_list")
+@safe_handler(bot)
+def handle_packs_list(call):
+    """Показывает список из трёх паков. Точка входа — кнопка внизу категорий."""
+    analytics.log_event(call.from_user.id, call.from_user.username, "view_packs")
+    try:
+        bot.edit_message_text(
+            _pack_intro_text(),
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=keyboards.packs_list_keyboard(),
+            parse_mode="HTML",
+        )
+    except Exception:
+        # Если пришли сюда с фото-экрана (карточка товара) — edit не сработает
+        try:
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
+        msg = bot.send_message(
+            call.message.chat.id,
+            _pack_intro_text(),
+            reply_markup=keyboards.packs_list_keyboard(),
+            parse_mode="HTML",
+        )
+        state.set_content(call.from_user.id, msg.message_id)
+    bot.answer_callback_query(call.id)
+
+
+def _pack_detail_text(pack: dict) -> str:
+    """
+    Карточка конкретного пака: тэглайн, состав с розничными ценами,
+    итог по рознице, цена набора со скидкой, экономия.
+    """
+    _shield  = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
+    _sword   = f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji>'
+    _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
+    _scroll  = f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji>'
+
+    lines = [
+        f"{_shield} <b>Сундук «{pack['name']}»</b>",
+        f"<i>{pack['tagline']}</i>",
+        "",
+        f"{_scroll} <b>Что внутри:</b>",
+    ]
+    for item in pack["items"]:
+        lines.append(
+            f"{_sword} {item['name']} <i>({item['brand']})</i> — {item['price']} ₽"
+        )
+    lines.extend([
+        "",
+        f"Розница поштучно: <s>{pack['retail_total']} ₽</s>",
+        f"{_diamond} <b>Цена сундука: {pack['bundle_price']} ₽</b>",
+        f"Экономия: <b>{pack['savings']} ₽</b> (−15%)",
+    ])
+    return "\n".join(lines)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pack:"))
+@safe_handler(bot)
+def handle_pack_detail(call):
+    """Показывает состав выбранного пака + кнопки 'Добавить'/'Отмена'."""
+    pack_id = int(call.data.split(":")[1])
+    pack = packs.get_pack(pack_id)
+    if not pack:
+        bot.answer_callback_query(call.id, "Такого сундука нет")
+        return
+
+    analytics.log_event(call.from_user.id, call.from_user.username, "view_pack", pack["name"])
+    bot.edit_message_text(
+        _pack_detail_text(pack),
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=keyboards.pack_detail_keyboard(pack_id),
+        parse_mode="HTML",
+    )
+    bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("pack_add:"))
+@safe_handler(bot)
+def handle_pack_add(call):
+    """Кладёт пак в корзину как единую позицию."""
+    pack_id = int(call.data.split(":")[1])
+    pack = packs.get_pack(pack_id)
+    if not pack:
+        bot.answer_callback_query(call.id, "Такого сундука нет")
+        return
+
+    cart.add_item(call.from_user.id, pack_id, qty=1)
+    analytics.log_event(call.from_user.id, call.from_user.username, "pack_added", pack["name"])
+    bot.answer_callback_query(call.id, f"Сундук «{pack['name']}» в корзине ✅")
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("cat:"))

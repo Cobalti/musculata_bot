@@ -7,6 +7,7 @@
 """
 
 from products import PRODUCTS_BY_ID
+import packs
 
 # {user_id: {product_id: qty}}
 _carts: dict[int, dict[int, int]] = {}
@@ -35,13 +36,24 @@ def cart_count(user_id: int) -> int:
     return sum(get_cart(user_id).values())
 
 
+def _lookup(item_id: int) -> dict | None:
+    """
+    Универсальный поиск позиции — сначала среди обычных товаров,
+    потом среди паков. Так cart.py становится независим от того,
+    что именно лежит в корзине.
+    """
+    if packs.is_pack_id(item_id):
+        return packs.pack_as_cart_item(item_id)
+    return PRODUCTS_BY_ID.get(item_id)
+
+
 def cart_total(user_id: int) -> int:
     cart = get_cart(user_id)
     total = 0
     for pid, qty in cart.items():
-        product = PRODUCTS_BY_ID.get(pid)
-        if product:
-            total += product["price"] * qty
+        item = _lookup(pid)
+        if item:
+            total += item["price"] * qty
     return total
 
 
@@ -52,9 +64,9 @@ def cart_text(user_id: int) -> str:
 
     lines = ["🛒 Твоя корзина:\n"]
     for pid, qty in cart.items():
-        product = PRODUCTS_BY_ID.get(pid)
-        if not product:
+        item = _lookup(pid)
+        if not item:
             continue
-        lines.append(f"• {product['name']} — {qty} шт. × {product['price']} ₽ = {product['price'] * qty} ₽")
+        lines.append(f"• {item['name']} — {qty} шт. × {item['price']} ₽ = {item['price'] * qty} ₽")
     lines.append(f"\nИтого: {cart_total(user_id)} ₽")
     return "\n".join(lines)

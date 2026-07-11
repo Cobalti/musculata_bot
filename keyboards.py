@@ -3,6 +3,7 @@ from products import get_page, total_pages, PRODUCTS_BY_ID, CATEGORIES, category
 from cart import get_cart
 import emoji_ids
 import emoji_ui
+import packs
 
 # Тексты кнопок главного меню — вынесены в константы,
 # чтобы не разъезжались при сравнении в обработчиках.
@@ -49,6 +50,35 @@ def categories_keyboard() -> types.InlineKeyboardMarkup:
     for idx, cat in enumerate(CATEGORIES):
         markup.add(types.InlineKeyboardButton(cat, callback_data=f"cat:{idx}:0"))
     markup.add(types.InlineKeyboardButton("📋 Все товары", callback_data=f"cat:{ALL_CATEGORIES}:0"))
+    # Паки — отдельный сюжет с готовыми наборами со скидкой, живёт
+    # своим маршрутом (callback packs_list), но точка входа — тут же,
+    # в самом низу выбора категорий, чтобы не терялась.
+    markup.add(types.InlineKeyboardButton("🛡 Военные Сундуки", callback_data="packs_list"))
+    return markup
+
+
+def packs_list_keyboard() -> types.InlineKeyboardMarkup:
+    """Выбор одного из трёх паков — Базовый / Продвинутый / Премиум."""
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    for pack in packs.PACKS:
+        markup.add(
+            types.InlineKeyboardButton(
+                f"⚔ {pack['name']} — {pack['bundle_price']} ₽",
+                callback_data=f"pack:{pack['id']}",
+            )
+        )
+    markup.add(types.InlineKeyboardButton("◀️ К категориям", callback_data="catlist"))
+    return markup
+
+
+def pack_detail_keyboard(pack_id: int) -> types.InlineKeyboardMarkup:
+    """
+    Под карточкой конкретного пака: 'Добавить в корзину' и 'Отмена'
+    (отмена возвращает к списку паков).
+    """
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(types.InlineKeyboardButton("⚔ Добавить в корзину", callback_data=f"pack_add:{pack_id}"))
+    markup.add(types.InlineKeyboardButton("◀️ Отмена", callback_data="packs_list"))
     return markup
 
 
@@ -115,15 +145,17 @@ def cart_keyboard(user_id: int) -> types.InlineKeyboardMarkup:
     markup = types.InlineKeyboardMarkup(row_width=1)
     cart = get_cart(user_id)
     for pid, qty in cart.items():
-        product = PRODUCTS_BY_ID.get(pid)
-        if not product:
-            continue
-        markup.add(
-            types.InlineKeyboardButton(
-                f"❌ {product['name']} ({qty} шт.)",
-                callback_data=f"remove:{pid}",
-            )
-        )
+        if packs.is_pack_id(pid):
+            pack = packs.get_pack(pid)
+            if not pack:
+                continue
+            label = f"❌ Пак «{pack['name']}» ({qty} шт.)"
+        else:
+            product = PRODUCTS_BY_ID.get(pid)
+            if not product:
+                continue
+            label = f"❌ {product['name']} ({qty} шт.)"
+        markup.add(types.InlineKeyboardButton(label, callback_data=f"remove:{pid}"))
     if cart:
         markup.add(types.InlineKeyboardButton("💳 Оформить заказ", callback_data="checkout"))
     return markup
