@@ -58,15 +58,26 @@ def cart_total(user_id: int) -> int:
 
 
 def cart_text(user_id: int) -> str:
+    """
+    HTML-текст корзины с кастомными эмодзи (⚔️ у товаров, 🛡 у сундуков).
+    Используется в обработчике 'Корзина' в main.py — там отправляется с parse_mode
+    и через emoji_ui, так что HTML-теги здесь корректны.
+    """
+    import emoji_ids as _e
+    _sword = f'<tg-emoji emoji-id="{_e.SWORD}">⚔️</tg-emoji>'
+    _shield = f'<tg-emoji emoji-id="{_e.SHIELD}">🛡</tg-emoji>'
+    _diamond = f'<tg-emoji emoji-id="{_e.DIAMOND}">💎</tg-emoji>'
+
     cart = get_cart(user_id)
     if not cart:
-        return "🛒 Корзина пуста, соратник."
+        return f"{_shield} <b>Оружейная пуста, соратник.</b>\nЗагляни в каталог, чтобы собрать снаряжение."
 
-    lines = ["🛒 Твоя корзина:\n"]
+    lines = [f"{_shield} <b>Твоя оружейная:</b>\n"]
     for pid, qty in cart.items():
         item = _lookup(pid)
         if not item:
             continue
-        lines.append(f"• {item['name']} — {qty} шт. × {item['price']} ₽ = {item['price'] * qty} ₽")
-    lines.append(f"\nИтого: {cart_total(user_id)} ₽")
+        icon = _shield if packs.is_pack_id(pid) else _sword
+        lines.append(f"{icon} {item['name']} — {qty} шт. × {item['price']} ₽ = <b>{item['price'] * qty} ₽</b>")
+    lines.append(f"\n{_diamond} <b>Итого: {cart_total(user_id)} ₽</b>")
     return "\n".join(lines)

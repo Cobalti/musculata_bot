@@ -60,6 +60,71 @@ def send_message_with_emoji(chat_id: int, html_text: str, reply_markup: dict | N
     return data
 
 
+def edit_message_with_emoji(chat_id: int, message_id: int, html_text: str,
+                              reply_markup: dict | None = None) -> dict:
+    """
+    Аналог send_message_with_emoji, но редактирует существующее сообщение.
+    Нужен для переходов между экранами (категории → страница каталога →
+    карточка товара) без "мигания" — сообщение остаётся тем же, меняется
+    только его содержимое и клавиатура с эмодзи-кнопками.
+    """
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": html_text,
+        "parse_mode": "HTML",
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+
+    response = requests.post(f"{API_BASE}/editMessageText", json=payload, timeout=10)
+    data = response.json()
+    if not data.get("ok"):
+        # "message is not modified" — валидная ситуация (например, повторное
+        # нажатие той же кнопки); не логируем как ошибку, чтобы не шуметь.
+        desc = data.get("description", "")
+        if "not modified" not in desc:
+            logger.warning("editMessageText не удался: %s", data)
+    return data
+
+
+def send_photo_with_emoji(chat_id: int, photo_file, caption_html: str,
+                            reply_markup: dict | None = None) -> dict:
+    """
+    Отправка фото с caption, в котором есть кастомные эмодзи, + клавиатура
+    с эмодзи-кнопками. Используется в карточке товара.
+
+    photo_file — открытый файловый объект (open(path, "rb")) либо file_id
+    (строка), уже загруженная в Telegram.
+    """
+    data_fields = {
+        "chat_id": chat_id,
+        "caption": caption_html,
+        "parse_mode": "HTML",
+    }
+    if reply_markup:
+        import json as _json
+        data_fields["reply_markup"] = _json.dumps(reply_markup)
+
+    if isinstance(photo_file, str):
+        # уже file_id — отправляем как обычное поле
+        data_fields["photo"] = photo_file
+        response = requests.post(f"{API_BASE}/sendPhoto", data=data_fields, timeout=10)
+    else:
+        # файловый объект — грузим как multipart
+        response = requests.post(
+            f"{API_BASE}/sendPhoto",
+            data=data_fields,
+            files={"photo": photo_file},
+            timeout=30,
+        )
+
+    result = response.json()
+    if not result.get("ok"):
+        logger.error("sendPhoto с эмодзи не удался: %s", result)
+    return result
+
+
 def build_emoji_button(text: str, callback_data: str | None = None, url: str | None = None,
                         style: str | None = None, icon_custom_emoji_id: str | None = None) -> dict:
     """

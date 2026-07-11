@@ -62,12 +62,19 @@ def delete_user_message(message):
 def show_content(chat_id, user_id, text, reply_markup=None, parse_mode=None):
     """
     Показывает "экран" (каталог/корзина/заглушка), удаляя предыдущий.
+
+    reply_markup может быть либо обычным telebot-объектом
+    (InlineKeyboardMarkup), либо словарём для эмодзи-кнопок из emoji_ui
+    (форма {"inline_keyboard": [[{...}]]}). В случае словаря отправка идёт
+    через прямой Bot API (emoji_ui), чтобы эмодзи на кнопках отобразились.
+
     ВАЖНО: эти сообщения НИКОГДА не несут ReplyKeyboardMarkup — поэтому
     постоянное меню внизу (отправленное один раз при первом /start)
     вообще не затрагивается ни при каких переходах между разделами.
 
     parse_mode: "HTML" нужен там, где в тексте используются кастомные
     эмодзи через <tg-emoji emoji-id="...">заглушка</tg-emoji>.
+    Для эмодзи-словарей parse_mode всегда HTML (emoji_ui сам его ставит).
     """
     old_id = state.get_content(user_id)
     if old_id:
@@ -76,9 +83,33 @@ def show_content(chat_id, user_id, text, reply_markup=None, parse_mode=None):
         except Exception:
             pass
 
+    if isinstance(reply_markup, dict):
+        # эмодзи-словарь → отправляем через прямой API
+        result = emoji_ui.send_message_with_emoji(chat_id, text, reply_markup=reply_markup)
+        if result.get("ok"):
+            state.set_content(user_id, result["result"]["message_id"])
+        return result
+
     msg = bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
     state.set_content(user_id, msg.message_id)
     return msg
+
+
+def edit_content(chat_id, message_id, text, reply_markup=None, parse_mode="HTML"):
+    """
+    Редактирует существующее сообщение. Работает и с обычным telebot-объектом,
+    и со словарём эмодзи-клавиатуры — сам роутит в нужный API.
+    """
+    if isinstance(reply_markup, dict):
+        return emoji_ui.edit_message_with_emoji(chat_id, message_id, text, reply_markup=reply_markup)
+    try:
+        return bot.edit_message_text(
+            text, chat_id, message_id,
+            reply_markup=reply_markup, parse_mode=parse_mode,
+        )
+    except Exception as e:
+        logger.warning("edit_content не смог отредактировать сообщение: %s", e)
+        return None
 
 
 # ---------- Старт: согласие на обработку ПД + меню создаётся один раз ----------
@@ -98,14 +129,16 @@ def start_message(message):
         # дальше меню не показывает вообще (see errors.safe_handler —
         # он же блокирует и остальные разделы для этого пользователя).
         if not state.get_consent_message(user_id):
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton("✅ Принимаю", callback_data="consent_accept"))
-            consent_msg = bot.send_message(message.chat.id, CONSENT_TEXT, reply_markup=markup)
-            state.set_consent_message(user_id, consent_msg.message_id)
+            result = emoji_ui.send_message_with_emoji(
+                message.chat.id, CONSENT_TEXT,
+                reply_markup=keyboards.consent_keyboard_dict(),
+            )
+            if result.get("ok"):
+                state.set_consent_message(user_id, result["result"]["message_id"])
         else:
             bot.send_message(
                 message.chat.id,
-                "Чтобы продолжить, нажми «✅ Принимаю» в сообщении с условиями выше ⬆️",
+                "Чтобы продолжить, нажми «Принимаю» в сообщении с условиями выше ⬆️",
             )
         return
 
@@ -128,9 +161,9 @@ def start_message(message):
 
     menu_msg = bot.send_message(
         message.chat.id,
-        f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji> Приветствую, соратник!\n\n'
-        "Перед тобой снаряжение для покорения новых вершин силы.\n"
-        "Меню внизу — твой компас, оно всегда под рукой.",
+        f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji> <b>Приветствую, соратник!</b>\n\n'
+        f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji> Перед тобой снаряжение для покорения новых вершин силы.\n'
+        f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji> Меню внизу — твой компас, оно всегда под рукой.',
         reply_markup=keyboards.main_menu(),
         parse_mode="HTML",
     )
@@ -147,20 +180,20 @@ def handle_consent_accept(call):
 
     # Убираем кнопку из уже показанного уведомления и помечаем его принятым —
     # само уведомление остаётся в чате навсегда, как юридический текст.
-    bot.edit_message_text(
-        CONSENT_TEXT + "\n\n✅ Согласие получено. Спасибо!",
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=types.InlineKeyboardMarkup(),
+    _news = f'<tg-emoji emoji-id="{emoji_ids.NEWS}">🗞</tg-emoji>'
+    emoji_ui.edit_message_with_emoji(
+        call.message.chat.id, call.message.message_id,
+        CONSENT_TEXT + f"\n\n{_news} <b>Согласие получено. Спасибо!</b>",
+        reply_markup={"inline_keyboard": []},
     )
-    bot.answer_callback_query(call.id, "Принято ✅")
+    bot.answer_callback_query(call.id, "Принято ⚔")
 
     if not state.get_menu(user_id):
         menu_msg = bot.send_message(
             call.message.chat.id,
-            f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji> Приветствую, соратник!\n\n'
-            "Перед тобой снаряжение для покорения новых вершин силы.\n"
-            "Меню внизу — твой компас, оно всегда под рукой.",
+            f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji> <b>Приветствую, соратник!</b>\n\n'
+            f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji> Перед тобой снаряжение для покорения новых вершин силы.\n'
+            f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji> Меню внизу — твой компас, оно всегда под рукой.',
             reply_markup=keyboards.main_menu(),
             parse_mode="HTML",
         )
@@ -178,7 +211,7 @@ def handle_catalog_button(message):
         message.chat.id,
         message.from_user.id,
         f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji> Выбери категорию снаряжения:',
-        reply_markup=keyboards.categories_keyboard(),
+        reply_markup=keyboards.categories_keyboard_dict(),
         parse_mode="HTML",
     )
 
@@ -186,13 +219,13 @@ def handle_catalog_button(message):
 @bot.callback_query_handler(func=lambda c: c.data == "catlist")
 @safe_handler(bot)
 def handle_catlist(call):
-    bot.edit_message_text(
-        f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji> Выбери категорию снаряжения:',
+    edit_content(
         call.message.chat.id,
         call.message.message_id,
-        reply_markup=keyboards.categories_keyboard(),
-        parse_mode="HTML",
+        f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji> Выбери категорию снаряжения:',
+        reply_markup=keyboards.categories_keyboard_dict(),
     )
+    bot.answer_callback_query(call.id)
 
 
 # ---------- Военные Сундуки (паки) ----------
@@ -226,27 +259,20 @@ def _pack_intro_text() -> str:
 def handle_packs_list(call):
     """Показывает список из трёх паков. Точка входа — кнопка внизу категорий."""
     analytics.log_event(call.from_user.id, call.from_user.username, "view_packs")
-    try:
-        bot.edit_message_text(
-            _pack_intro_text(),
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=keyboards.packs_list_keyboard(),
-            parse_mode="HTML",
-        )
-    except Exception:
+    kb = keyboards.packs_list_keyboard_dict()
+    result = emoji_ui.edit_message_with_emoji(
+        call.message.chat.id, call.message.message_id,
+        _pack_intro_text(), reply_markup=kb,
+    )
+    if not result.get("ok"):
         # Если пришли сюда с фото-экрана (карточка товара) — edit не сработает
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception:
             pass
-        msg = bot.send_message(
-            call.message.chat.id,
-            _pack_intro_text(),
-            reply_markup=keyboards.packs_list_keyboard(),
-            parse_mode="HTML",
-        )
-        state.set_content(call.from_user.id, msg.message_id)
+        sent = emoji_ui.send_message_with_emoji(call.message.chat.id, _pack_intro_text(), reply_markup=kb)
+        if sent.get("ok"):
+            state.set_content(call.from_user.id, sent["result"]["message_id"])
     bot.answer_callback_query(call.id)
 
 
@@ -290,12 +316,10 @@ def handle_pack_detail(call):
         return
 
     analytics.log_event(call.from_user.id, call.from_user.username, "view_pack", pack["name"])
-    bot.edit_message_text(
+    emoji_ui.edit_message_with_emoji(
+        call.message.chat.id, call.message.message_id,
         _pack_detail_text(pack),
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=keyboards.pack_detail_keyboard(pack_id),
-        parse_mode="HTML",
+        reply_markup=keyboards.pack_detail_keyboard_dict(pack_id),
     )
     bot.answer_callback_query(call.id)
 
@@ -336,26 +360,18 @@ def handle_category_page(call):
     # edit_message_text не умеет превращать фото-сообщение в текстовое,
     # поэтому пытаемся сначала edit — если не вышло, удаляем и отправляем
     # новое текстовое.
-    try:
-        bot.edit_message_text(
-            header,
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=keyboards.catalog_page_keyboard(page, call.from_user.id, cat_idx),
-            parse_mode="HTML",
-        )
-    except Exception:
+    kb = keyboards.catalog_page_keyboard_dict(page, call.from_user.id, cat_idx)
+    result = emoji_ui.edit_message_with_emoji(
+        call.message.chat.id, call.message.message_id, header, reply_markup=kb,
+    )
+    if not result.get("ok"):
         try:
             bot.delete_message(call.message.chat.id, call.message.message_id)
         except Exception:
             pass
-        msg = bot.send_message(
-            call.message.chat.id,
-            header,
-            reply_markup=keyboards.catalog_page_keyboard(page, call.from_user.id, cat_idx),
-            parse_mode="HTML",
-        )
-        state.set_content(call.from_user.id, msg.message_id)
+        sent = emoji_ui.send_message_with_emoji(call.message.chat.id, header, reply_markup=kb)
+        if sent.get("ok"):
+            state.set_content(call.from_user.id, sent["result"]["message_id"])
     bot.answer_callback_query(call.id)
 
 
@@ -386,20 +402,18 @@ def handle_view_product(call):
         pass
 
     caption = (
-        f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji> {product["name"]}\n'
-        f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji> Цена: {product["price"]} ₽'
+        f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji> <b>{product["name"]}</b>\n'
+        f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji> Цена: <b>{product["price"]} ₽</b>'
+    )
+    kb = keyboards.product_card_keyboard_dict(
+        product["id"], int(page), int(cat_idx), call.from_user.id
     )
     with open(PLACEHOLDER_IMAGE_PATH, "rb") as photo:
-        msg = bot.send_photo(
-            call.message.chat.id,
-            photo,
-            caption=caption,
-            parse_mode="HTML",
-            reply_markup=keyboards.product_card_keyboard(
-                product["id"], int(page), int(cat_idx), call.from_user.id
-            ),
+        result = emoji_ui.send_photo_with_emoji(
+            call.message.chat.id, photo, caption_html=caption, reply_markup=kb,
         )
-    state.set_content(call.from_user.id, msg.message_id)
+    if result.get("ok"):
+        state.set_content(call.from_user.id, result["result"]["message_id"])
     bot.answer_callback_query(call.id)
 
 
@@ -414,14 +428,20 @@ def handle_add_to_cart(call):
     if product:
         analytics.log_event(user_id, call.from_user.username, "add_to_cart", product["name"])
 
-    # edit_message_reply_markup работает и на текстовых сообщениях, и на
-    # сообщениях с фото — тут ничего менять не нужно.
-    bot.edit_message_reply_markup(
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=keyboards.product_card_keyboard(int(pid), int(page), int(cat_idx), user_id),
+    # Обновляем только клавиатуру под карточкой товара — через прямой
+    # API, потому что клавиатура теперь эмодзи-словарь (не telebot-объект).
+    import json as _json
+    import requests as _rq
+    _rq.post(
+        f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageReplyMarkup",
+        json={
+            "chat_id": call.message.chat.id,
+            "message_id": call.message.message_id,
+            "reply_markup": keyboards.product_card_keyboard_dict(int(pid), int(page), int(cat_idx), user_id),
+        },
+        timeout=10,
     )
-    bot.answer_callback_query(call.id, "Добавлено ✅")
+    bot.answer_callback_query(call.id, "Добавлено ⚔")
 
 
 # ---------- Корзина ----------
@@ -436,7 +456,7 @@ def handle_cart_button(message):
         message.chat.id,
         user_id,
         cart.cart_text(user_id),
-        reply_markup=keyboards.cart_keyboard(user_id),
+        reply_markup=keyboards.cart_keyboard_dict(user_id),
     )
 
 
@@ -446,11 +466,10 @@ def handle_remove_item(call):
     pid = int(call.data.split(":")[1])
     cart.remove_item(call.from_user.id, pid)
     bot.answer_callback_query(call.id, "Убрано из корзины")
-    bot.edit_message_text(
+    emoji_ui.edit_message_with_emoji(
+        call.message.chat.id, call.message.message_id,
         cart.cart_text(call.from_user.id),
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=keyboards.cart_keyboard(call.from_user.id),
+        reply_markup=keyboards.cart_keyboard_dict(call.from_user.id),
     )
 
 
@@ -485,12 +504,15 @@ def handle_checkout(call):
 
     if response.get("status") == "error" or not response.get("checkout_url"):
         analytics.log_event(user_id, call.from_user.username, "checkout_failed", "site error")
+        _sword = f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji>'
         show_content(
             call.message.chat.id,
             user_id,
-            "❌ Не получилось оформить заказ — сайт временно недоступен "
-            "или интеграция ещё не настроена. Попробуй чуть позже, либо "
-            "напиши в поддержку (⚙️ Настройки → Поддержка).",
+            f"{_sword} <b>Не удалось оформить заказ.</b>\n\n"
+            "Сайт временно недоступен, либо интеграция ещё не настроена. "
+            "Попробуй чуть позже — или напиши в поддержку "
+            "(Настройки → Поддержка).",
+            parse_mode="HTML",
         )
         bot.answer_callback_query(call.id, "Ошибка сервера")
         return
@@ -511,37 +533,34 @@ def handle_checkout(call):
     analytics.log_event(user_id, call.from_user.username, "checkout", f"Order #{order_id}")
 
     warning = (
-        "⚠️ Некоторые товары оказались недоступны — счёт сформирован "
+        f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji> '
+        "Некоторые товары оказались недоступны — счёт сформирован "
         "только на доступные позиции.\n\n"
         if missing_reported else ""
     )
-    text = f"{warning}✅ Заказ #{order_id} сформирован!\n\nНажми кнопку ниже, чтобы завершить оплату на сайте."
+    _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
+    text = (
+        f"{warning}{_diamond} <b>Заказ #{order_id} сформирован!</b>\n\n"
+        "Нажми кнопку ниже, чтобы завершить оплату на сайте."
+    )
 
-    # Кнопка оплаты — самое важное место, чтобы визуально выделить (зелёная,
-    # style="success") и добавить фирменный эмодзи. Это возможно только через
-    # прямой вызов Bot API (emoji_ui.py) — pyTelegramBotAPI пока не поддерживает
-    # style/icon_custom_emoji_id (см. комментарии в emoji_ui.py).
-    # Если ID эмодзи ещё не заполнен в emoji_ids.py — отправляем обычной
-    # кнопкой через стандартный bot.send_message, чтобы не сломать checkout.
-    sent_via_emoji_ui = False
-    if emoji_ids.CHECK:
-        try:
-            button = emoji_ui.build_emoji_button(
-                "Перейти к оплате", url=checkout_url,
-                style="success", icon_custom_emoji_id=emoji_ids.CHECK,
-            )
-            keyboard = emoji_ui.build_emoji_keyboard([[button]])
-            result = emoji_ui.send_message_with_emoji(call.message.chat.id, text, reply_markup=keyboard)
-            if result.get("ok"):
-                sent_via_emoji_ui = True
-                state.set_content(user_id, result["result"]["message_id"])
-        except Exception as e:
-            logger.warning("Не удалось отправить стилизованную кнопку оплаты, фолбэк на обычную: %s", e)
-
-    if not sent_via_emoji_ui:
+    # Кнопка оплаты — зелёная (style="success"), с фирменным эмодзи 💎
+    keyboard = emoji_ui.build_emoji_keyboard([[
+        emoji_ui.build_emoji_button(
+            "Перейти к оплате", url=checkout_url,
+            style="success", icon_custom_emoji_id=emoji_ids.DIAMOND,
+        )
+    ]])
+    result = emoji_ui.send_message_with_emoji(call.message.chat.id, text, reply_markup=keyboard)
+    if result.get("ok"):
+        state.set_content(user_id, result["result"]["message_id"])
+    else:
+        # Fallback на обычную кнопку, если Telegram не принял (например,
+        # владелец бота ещё без Premium — тогда icon_custom_emoji_id
+        # игнорируется, но само сообщение всё равно должно уйти).
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("💳 Перейти к оплате", url=checkout_url))
-        show_content(call.message.chat.id, user_id, text, reply_markup=markup)
+        markup.add(types.InlineKeyboardButton("Перейти к оплате", url=checkout_url))
+        show_content(call.message.chat.id, user_id, text, reply_markup=markup, parse_mode="HTML")
 
     bot.answer_callback_query(call.id)
 
@@ -569,10 +588,10 @@ def handle_invite_stub(message):
 
 
 STATUS_LABELS = {
-    "pending": "⏳ Ожидает оплаты",
-    "paid": "✅ Оплачен",
-    "missing_items": "⚠️ Часть товаров недоступна",
-    "error": "❌ Ошибка оформления",
+    "pending":       f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji> Ожидает оплаты',
+    "paid":          f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji> Оплачен',
+    "missing_items": f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji> Часть товаров недоступна',
+    "error":         f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji> Ошибка оформления',
 }
 
 
@@ -597,18 +616,18 @@ def handle_orders(message):
         show_content(
             message.chat.id,
             user_id,
-            f"{_ghost} У тебя пока нет заказов. Загляни в {_scroll} Каталог, "
-            "чтобы выбрать что-нибудь!",
+            f"{_ghost} <b>Твоя летопись пока пуста.</b>\n"
+            f"Загляни в {_scroll} <b>Каталог</b> — впиши в неё первую битву.",
             parse_mode="HTML",
         )
         return
 
-    lines = [f"{_ghost} Твои последние заказы:\n"]
+    lines = [f"{_ghost} <b>Хроники твоих походов:</b>\n"]
     for order in orders:
         status_label = STATUS_LABELS.get(order["status"], order["status"])
         order_id = order["site_order_id"] or "—"
         total = f"{order['total']} ₽" if order["total"] else "—"
-        lines.append(f"Заказ #{order_id} · {status_label} · {total}")
+        lines.append(f"<b>Заказ #{order_id}</b> · {status_label} · {total}")
 
     show_content(message.chat.id, user_id, "\n".join(lines), parse_mode="HTML")
 
@@ -638,8 +657,8 @@ def handle_settings_button(message):
     show_content(
         message.chat.id,
         message.from_user.id,
-        "⚙️ Настройки:",
-        reply_markup=keyboards.settings_keyboard(),
+        f'<tg-emoji emoji-id="{emoji_ids.NEWS}">🗞</tg-emoji> <b>Настройки:</b>',
+        reply_markup=keyboards.settings_keyboard_dict(),
     )
 
 
@@ -651,13 +670,9 @@ def handle_settings_consent(call):
     споров ("покажи, на что я соглашался") это должно быть доступно
     в любой момент, а не только в момент самого первого /start.
     """
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("◀️ Назад", callback_data="settings:back"))
-    bot.edit_message_text(
-        CONSENT_TEXT,
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=markup,
+    emoji_ui.edit_message_with_emoji(
+        call.message.chat.id, call.message.message_id, CONSENT_TEXT,
+        reply_markup=keyboards.settings_consent_back_keyboard_dict(),
     )
     bot.answer_callback_query(call.id)
 
@@ -665,11 +680,10 @@ def handle_settings_consent(call):
 @bot.callback_query_handler(func=lambda c: c.data == "settings:back")
 @safe_handler(bot)
 def handle_settings_back(call):
-    bot.edit_message_text(
-        "⚙️ Настройки:",
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=keyboards.settings_keyboard(),
+    emoji_ui.edit_message_with_emoji(
+        call.message.chat.id, call.message.message_id,
+        f'<tg-emoji emoji-id="{emoji_ids.NEWS}">🗞</tg-emoji> <b>Настройки:</b>',
+        reply_markup=keyboards.settings_keyboard_dict(),
     )
     bot.answer_callback_query(call.id)
 
@@ -678,12 +692,12 @@ def handle_settings_back(call):
 @safe_handler(bot)
 def handle_settings_support(call):
     state.set_awaiting_support(call.from_user.id)
-    bot.edit_message_text(
-        "⚒️ Опиши свой вопрос ОДНИМ сообщением — я передам его администратору "
-        "напрямую, вместе с твоим Telegram-ником.\n\n"
-        "Чтобы отменить отправку — введи команду /cancel_tech.",
-        call.message.chat.id,
-        call.message.message_id,
+    _pencil = f'<tg-emoji emoji-id="{emoji_ids.PENCIL}">📝</tg-emoji>'
+    emoji_ui.edit_message_with_emoji(
+        call.message.chat.id, call.message.message_id,
+        f"{_pencil} Опиши свой вопрос ОДНИМ сообщением — я передам его администратору "
+        f"напрямую, вместе с твоим Telegram-ником.\n\n"
+        f"Чтобы отменить отправку — введи команду /cancel_tech.",
     )
     bot.answer_callback_query(call.id)
 
@@ -779,14 +793,17 @@ def handle_support_message(message):
         show_content(
             message.chat.id,
             user_id,
-            "✅ Вопрос отправлен администратору. Как только ответят — пришлём ответ сюда же.",
+            f'<tg-emoji emoji-id="{emoji_ids.PENCIL}">📝</tg-emoji> <b>Вопрос отправлен глашатаю.</b>\n'
+            "Как только ответят — весть придёт сюда же.",
+            parse_mode="HTML",
         )
     else:
         show_content(
             message.chat.id,
             user_id,
-            "⚠️ Не получилось отправить вопрос администратору (техническая накладка). "
+            f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji> Не удалось передать вопрос глашатаю (техническая накладка). '
             "Попробуй ещё раз чуть позже через раздел «Поддержка».",
+            parse_mode="HTML",
         )
 
 
@@ -806,7 +823,11 @@ def handle_admin_reply(message):
         return  # это Reply не на вопрос поддержки — игнорируем
 
     try:
-        bot.send_message(target_user_id, f"💬 Ответ поддержки:\n\n{message.text}")
+        bot.send_message(
+            target_user_id,
+            f'<tg-emoji emoji-id="{emoji_ids.PENCIL}">📝</tg-emoji> <b>Весть от глашатая:</b>\n\n{message.text}',
+            parse_mode="HTML",
+        )
         bot.reply_to(message, "✅ Ответ отправлен пользователю.")
         analytics.log_event(target_user_id, None, "support_reply_sent", message.text[:200])
     except Exception as e:
