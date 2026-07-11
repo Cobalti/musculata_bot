@@ -89,3 +89,44 @@ def _error_response() -> dict:
         "checkout_url": None,
         "missing_items_reported": False,
     }
+
+
+# ЖДЁМ ОТ ФЁДОРА: отдельный (или тот же самый?) эндпоинт для оплаты
+# подписки "Орден" — этого ещё нет в согласованной схеме, см. список
+# вопросов. Пока используем ту же переменную, что и обычный заказ, как
+# временную заглушку, чтобы код не падал — как только он даст точный
+# адрес, здесь меняется одна строка.
+SITE_SUBSCRIPTION_ENDPOINT = os.environ.get("SITE_SUBSCRIPTION_ENDPOINT", "")
+
+
+def create_subscription_order(telegram_id: int) -> dict:
+    """
+    Отправляет запрос на оплату годовой подписки "Орден".
+
+    ВНИМАНИЕ: SITE_SUBSCRIPTION_ENDPOINT ещё не согласован с Фёдором —
+    пока переменная пустая, функция сразу возвращает error, чтобы
+    handle_subscribe_pay в main.py мог показать пользователю понятное
+    сообщение "подписка временно недоступна", а не упасть или зависнуть.
+    """
+    if not SITE_SUBSCRIPTION_ENDPOINT or not X_BOT_TOKEN:
+        logger.error("Оплата подписки недоступна: эндпоинт или токен ещё не настроены Фёдором")
+        return _error_response()
+
+    payload = {"telegram_id": telegram_id, "product": "order_subscription"}
+    headers = {"Content-Type": "application/json", "X-Bot-Token": X_BOT_TOKEN}
+
+    try:
+        response = requests.post(
+            SITE_SUBSCRIPTION_ENDPOINT, json=payload, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS
+        )
+        response.raise_for_status()
+        data = response.json()
+        logger.info("Запрос на оплату подписки создан: telegram_id=%s order_id=%s",
+                     telegram_id, data.get("order_id"))
+        return data
+    except requests.exceptions.RequestException as e:
+        logger.error("Ошибка при создании заказа подписки для telegram_id=%s: %s", telegram_id, e)
+        return _error_response()
+    except ValueError as e:
+        logger.error("Сайт вернул невалидный JSON для подписки telegram_id=%s: %s", telegram_id, e)
+        return _error_response()

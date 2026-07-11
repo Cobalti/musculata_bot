@@ -28,6 +28,7 @@ import os
 import hmac
 
 import orders_db
+import subscriptions_db
 import emoji_ids
 
 logger = logging.getLogger("webhooks")
@@ -96,6 +97,14 @@ def missing_items():
 
 @app.route("/webhook/payment-success", methods=["POST"])
 def payment_success():
+    """
+    ВАЖНО (пока не согласовано с Фёдором окончательно): чтобы отличить
+    оплату обычного заказа от оплаты подписки Ордена, ожидаем опциональное
+    поле "type" в теле запроса: "subscription" — активируем подписку,
+    иначе (или поле отсутствует) — считаем это обычным заказом, как раньше.
+    Если Фёдор пришлёт другой контракт различения — здесь меняется
+    только эта развилка.
+    """
     if not _check_secret(request):
         return jsonify({"error": "invalid secret"}), 401
 
@@ -103,10 +112,22 @@ def payment_success():
     telegram_id = data.get("telegram_id")
     order_id = data.get("order_id")
     total = data.get("total")
+    payment_type = data.get("type", "order")
 
     if not all([telegram_id, order_id, total]):
         logger.warning("payment-success: некорректное тело запроса: %s", data)
         return jsonify({"error": "bad payload"}), 400
+
+    if payment_type == "subscription":
+        subscriptions_db.activate_subscription(telegram_id, site_order_id=order_id)
+        text = (
+            f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji> '
+            f"Оплата подписки Ордена на сумму {total} ₽ успешно получена! "
+            f"Добро пожаловать в Орден — теперь тебе доступны Военные Сундуки."
+        )
+        _notify(telegram_id, text, parse_mode="HTML")
+        logger.info("payment-success (подписка) обработан: telegram_id=%s order_id=%s", telegram_id, order_id)
+        return jsonify({"status": "ok"}), 200
 
     updated = orders_db.mark_order_paid(site_order_id=order_id, telegram_id=telegram_id, total=total)
     if not updated:
