@@ -36,15 +36,13 @@ def main():
     # (missing-items, payment-success) уходили через рабочий бот.
     webhooks.set_bot_instance(bot_main.bot)
 
-    # Реальная диагностика сервера (не слепое "Бот запущен") — уведомляет
-    # админа только при смене статуса. Плюс фоновая проверка каждые 5 минут,
-    # чтобы заметить деградацию (например, диск заполнился) уже во время
-    # работы, а не только в момент старта процесса.
+    # Реальная диагностика сервера (не слепое "Бот запущен") — пишет в
+    # консоль/лог только при смене статуса. Ничего не шлёт в Telegram —
+    # админ смотрит статус процесса в панели bothost. Плюс фоновая проверка
+    # каждые 5 минут, чтобы заметить деградацию (например, диск заполнился)
+    # уже во время работы, а не только в момент старта процесса.
     bot_main.run_startup_healthcheck()
-    if bot_main.ADMIN_CHAT_ID:
-        bot_main.health_check.start_periodic_check(
-            bot_main.bot, bot_main.BOT_TOKEN, bot_main.ADMIN_CHAT_ID,
-        )
+    bot_main.health_check.start_periodic_check(bot_main.BOT_TOKEN)
 
     polling_thread = threading.Thread(target=start_bot_polling, daemon=True)
     polling_thread.start()

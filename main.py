@@ -1030,27 +1030,16 @@ def handle_free_text(message):
 def run_startup_healthcheck():
     """
     Настоящая диагностика сервера вместо слепого "Бот запущен" на каждый
-    рестарт. Уведомляет админа только при смене статуса (см. health_check.py) —
-    это убирает спам, если хостинг периодически перезапускает процесс
-    (crash loop) при чистом здоровом сервере.
+    рестарт. Пишет результат в консоль/лог (не в Telegram — админ смотрит
+    статус процесса в панели bothost) только при смене статуса — это
+    убирает спам в логах при чистых безобидных перезапусках.
 
     Вызывается и из main.py (запуск для разработки), и из run.py
     (продакшен-точка входа) — чтобы диагностика работала в обоих случаях.
+    Работает независимо от ADMIN_CHAT_ID — это чисто диагностика сервера,
+    а не уведомление конкретного человека.
     """
-    if not ADMIN_CHAT_ID:
-        print(
-            "ℹ️ ADMIN_CHAT_ID не задан в .env — уведомления об ошибках, статусе "
-            "сервера и пересылка вопросов в поддержку работать не будут."
-        )
-        return
-
-    result = health_check.check_and_notify(bot, BOT_TOKEN, ADMIN_CHAT_ID)
-    if result["ok"]:
-        print("✅ Проверка сервера пройдена:")
-    else:
-        print("⚠️ Проверка сервера обнаружила проблемы:")
-    for detail in result["details"]:
-        print(f"   • {detail}")
+    health_check.check_and_log(BOT_TOKEN)
 
 
 if __name__ == "__main__":
@@ -1067,8 +1056,14 @@ if __name__ == "__main__":
         print("   Бот всё равно запустится, просто команда не будет видна в '/' меню.")
 
     run_startup_healthcheck()
-    if ADMIN_CHAT_ID:
-        health_check.start_periodic_check(bot, BOT_TOKEN, ADMIN_CHAT_ID)
+    health_check.start_periodic_check(BOT_TOKEN)
+
+    if not ADMIN_CHAT_ID:
+        print(
+            "ℹ️ ADMIN_CHAT_ID не задан в .env — уведомления об ошибках и пересылка "
+            "вопросов из поддержки работать не будут (это не связано с проверкой "
+            "состояния сервера выше)."
+        )
 
     print("Бот запущен... (для остановки нажми Ctrl+C)")
     logger.info("Бот запущен")
