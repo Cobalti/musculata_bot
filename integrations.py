@@ -99,20 +99,32 @@ def _error_response() -> dict:
 SITE_SUBSCRIPTION_ENDPOINT = os.environ.get("SITE_SUBSCRIPTION_ENDPOINT", "")
 
 
-def create_subscription_order(telegram_id: int) -> dict:
+def create_subscription_order(telegram_id: int, pack_id: int) -> dict:
     """
-    Отправляет запрос на оплату годовой подписки "Орден".
+    Отправляет запрос на оплату годовой подписки на конкретный тариф
+    (пак). Паки — это и есть тарифы подписки Ордена, отдельного понятия
+    "просто подписка без тарифа" не существует.
 
     ВНИМАНИЕ: SITE_SUBSCRIPTION_ENDPOINT ещё не согласован с Фёдором —
     пока переменная пустая, функция сразу возвращает error, чтобы
-    handle_subscribe_pay в main.py мог показать пользователю понятное
+    handle_pack_subscribe в main.py мог показать пользователю понятное
     сообщение "подписка временно недоступна", а не упасть или зависнуть.
+
+    Фёдор предложил (обсудит в начале следующей недели) ввести у себя
+    понятие "набор/бандл" и принимать его как один товар — соответственно,
+    в payload ниже уже заложено поле "bundle_id" под эту схему; как
+    только он подтвердит формат, тут может понадобиться только
+    переименовать поле, сама структура вызова не изменится.
     """
     if not SITE_SUBSCRIPTION_ENDPOINT or not X_BOT_TOKEN:
         logger.error("Оплата подписки недоступна: эндпоинт или токен ещё не настроены Фёдором")
         return _error_response()
 
-    payload = {"telegram_id": telegram_id, "product": "order_subscription"}
+    payload = {
+        "telegram_id": telegram_id,
+        "product": "order_subscription",
+        "bundle_id": pack_id,
+    }
     headers = {"Content-Type": "application/json", "X-Bot-Token": X_BOT_TOKEN}
 
     try:
@@ -121,8 +133,8 @@ def create_subscription_order(telegram_id: int) -> dict:
         )
         response.raise_for_status()
         data = response.json()
-        logger.info("Запрос на оплату подписки создан: telegram_id=%s order_id=%s",
-                     telegram_id, data.get("order_id"))
+        logger.info("Запрос на оплату подписки создан: telegram_id=%s pack_id=%s order_id=%s",
+                     telegram_id, pack_id, data.get("order_id"))
         return data
     except requests.exceptions.RequestException as e:
         logger.error("Ошибка при создании заказа подписки для telegram_id=%s: %s", telegram_id, e)

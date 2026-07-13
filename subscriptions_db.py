@@ -1,20 +1,37 @@
 """
 subscriptions_db.py — статус подписки "Орден" по каждому пользователю.
 
-Годовая подписка (365 дней) с поставками раз в 60 дней. Хранится
-отдельно от orders_db.py, потому что это принципиально другая сущность:
-заказ — разовое событие, подписка — состояние, которое либо активно,
-либо нет, и имеет срок действия.
+ВАЖНО: Паки ("Базовый"/"Продвинутый"/"Премиум") — это И ЕСТЬ подписка,
+а не отдельная фича поверх неё. Пользователь оформляет подписку на
+конкретный тариф (один из трёх паков) на год, и раз в 2 месяца (6 раз
+в год) ему по этому тарифу приходит доставка. Поэтому пак НЕ кладётся
+в корзину — выбор пака сразу запускает оплату годовой подписки на сайте.
+
+Хранится отдельно от orders_db.py, потому что подписка — это состояние
+(активна/нет, до какой даты, какой тариф), а не разовое событие заказа.
 
 СХЕМА:
     subscriptions (
         telegram_id    -- PK, кто подписан
-        status         -- 'active' / 'expired' / 'none' (none тут не
-                          хранится физически — просто нет записи)
-        site_order_id  -- order_id, которым сайт подтвердил оплату подписки
+        status         -- 'active' / 'inactive'
+        pack_id        -- ID тарифа (10001/10002/10003 из packs.py)
+        pack_name      -- имя тарифа на момент активации (для истории —
+                          если тарифы переименуют, старая подписка не
+                          "поедет" вслед за новым названием)
+        site_order_id  -- order_id, которым сайт подтвердил оплату
         started_at     -- когда активирована
         expires_at     -- когда истекает (started_at + 365 дней)
     )
+
+    pending_subscriptions (
+        telegram_id    -- PK
+        pack_id        -- какой тариф выбрал перед тем, как уйти платить
+        requested_at   -- когда нажал "Оформить подписку"
+    )
+    Нужно потому, что вебхук payment-success от сайта (пока не согласовано
+    окончательно с Фёдором) может не возвращать pack_id обратно — тогда
+    activate_subscription() подстрахует себя, взяв последний "запрос на
+    оплату" этого пользователя отсюда.
 """
 
 import sqlite3
@@ -36,9 +53,20 @@ def _init_db():
             CREATE TABLE IF NOT EXISTS subscriptions (
                 telegram_id   INTEGER PRIMARY KEY,
                 status        TEXT NOT NULL DEFAULT 'active',
+                pack_id       INTEGER,
+                pack_name     TEXT,
                 site_order_id INTEGER,
                 started_at    TEXT NOT NULL,
                 expires_at    TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending_subscriptions (
+                telegram_id  INTEGER PRIMARY KEY,
+                pack_id      INTEGER NOT NULL,
+                requested_at TEXT NOT NULL
             )
             """
         )
@@ -60,7 +88,7 @@ def _now() -> datetime:
 
 
 def has_active_subscription(telegram_id: int) -> bool:
-    """Главная проверка — используется при попытке добавить пак в корзину."""
+    """Главная проверка — используется при показе состава пака и статуса Ордена."""
     with _connect() as conn:
         row = conn.execute(
             "SELECT expires_at FROM subscriptions WHERE telegram_id = ? AND status = 'active'",
@@ -73,7 +101,7 @@ def has_active_subscription(telegram_id: int) -> bool:
 
 
 def get_subscription(telegram_id: int) -> dict | None:
-    """Полная информация о подписке — для экрана 'Орден' (статус, дата окончания)."""
+    """Полная информация о подписке — для экрана 'Орден' (тариф, дата окончания)."""
     with _connect() as conn:
         row = conn.execute(
             "SELECT * FROM subscriptions WHERE telegram_id = ?",
@@ -82,29 +110,76 @@ def get_subscription(telegram_id: int) -> dict | None:
     return dict(row) if row else None
 
 
-def activate_subscription(telegram_id: int, site_order_id: int | None = None) -> None:
+def record_pending_subscription(telegram_id: int, pack_id: int) -> None:
     """
-    Активирует/продлевает подписку на SUBSCRIPTION_DAYS дней от текущего
-    момента. Вызывается из вебхука payment-success, когда подтверждена
-    оплата именно подписки (см. main.py — webhooks.py должен уметь
-    различать заказ и подписку, см. вопрос к Фёдору про это).
+    Запоминает, какой тариф пользователь выбрал перед уходом на оплату —
+    вызывается сразу перед созданием запроса на сайт (см. main.py,
+    handle_subscribe_pay). Один пользователь — одно ожидание одновременно.
     """
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO pending_subscriptions (telegram_id, pack_id, requested_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(telegram_id) DO UPDATE SET
+                pack_id = excluded.pack_id,
+                requested_at = excluded.requested_at
+            """,
+            (telegram_id, pack_id, _now().isoformat()),
+        )
+
+
+def _pop_pending_pack_id(telegram_id: int) -> int | None:
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT pack_id FROM pending_subscriptions WHERE telegram_id = ?",
+            (telegram_id,),
+        ).fetchone()
+        conn.execute("DELETE FROM pending_subscriptions WHERE telegram_id = ?", (telegram_id,))
+    return row["pack_id"] if row else None
+
+
+def activate_subscription(telegram_id: int, site_order_id: int | None = None,
+                            pack_id: int | None = None) -> None:
+    """
+    Активирует подписку на SUBSCRIPTION_DAYS дней от текущего момента.
+    Вызывается из вебхука payment-success с type="subscription".
+
+    Если pack_id не передан явно сайтом — берём его из pending_subscriptions
+    (см. record_pending_subscription): то, что пользователь выбрал перед
+    уходом на оплату.
+    """
+    import packs  # локальный импорт, чтобы не плодить циклические зависимости на верхнем уровне
+
+    if pack_id is None:
+        pack_id = _pop_pending_pack_id(telegram_id)
+    else:
+        _pop_pending_pack_id(telegram_id)  # на всякий случай чистим "хвост" ожидания
+
+    pack = packs.get_pack(pack_id) if pack_id else None
+    pack_name = pack["name"] if pack else "Неизвестный тариф"
+
     now = _now()
     expires = now + timedelta(days=SUBSCRIPTION_DAYS)
     with _connect() as conn:
         conn.execute(
             """
-            INSERT INTO subscriptions (telegram_id, status, site_order_id, started_at, expires_at)
-            VALUES (?, 'active', ?, ?, ?)
+            INSERT INTO subscriptions (telegram_id, status, pack_id, pack_name, site_order_id, started_at, expires_at)
+            VALUES (?, 'active', ?, ?, ?, ?, ?)
             ON CONFLICT(telegram_id) DO UPDATE SET
                 status = 'active',
+                pack_id = excluded.pack_id,
+                pack_name = excluded.pack_name,
                 site_order_id = excluded.site_order_id,
                 started_at = excluded.started_at,
                 expires_at = excluded.expires_at
             """,
-            (telegram_id, site_order_id, now.isoformat(), expires.isoformat()),
+            (telegram_id, pack_id, pack_name, site_order_id, now.isoformat(), expires.isoformat()),
         )
-    logger.info("Подписка активирована: telegram_id=%s до %s", telegram_id, expires.isoformat())
+    logger.info(
+        "Подписка активирована: telegram_id=%s тариф=%s до %s",
+        telegram_id, pack_name, expires.isoformat(),
+    )
 
 
 _init_db()

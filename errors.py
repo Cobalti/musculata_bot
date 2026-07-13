@@ -25,7 +25,7 @@ safe_handler — оборачивает каждый обработчик соо
 import functools
 import logging
 
-import state
+import consent_db
 from notifier import notify_admin
 from rate_limit import is_rate_limited
 
@@ -74,7 +74,7 @@ def safe_handler(bot, require_consent: bool = True):
                 logger.warning("Rate limit сработал для user_id=%s", user_id)
                 return
 
-            if require_consent and user_id is not None and not state.has_given_consent(user_id):
+            if require_consent and user_id is not None and not consent_db.has_consent(user_id):
                 _remind_consent(bot, update)
                 return
 

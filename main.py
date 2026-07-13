@@ -19,6 +19,8 @@ from checkout import price_breakdown
 from integrations import create_order, create_subscription_order
 import orders_db
 import subscriptions_db
+import consent_db
+import health_check
 import emoji_ui
 import emoji_ids
 import packs
@@ -125,7 +127,7 @@ def start_message(message):
 
     analytics.log_event(user_id, message.from_user.username, "start")
 
-    if not state.has_given_consent(user_id):
+    if not consent_db.has_consent(user_id):
         # Жёсткий вариант согласия: без нажатия кнопки "Принимаю" бот
         # дальше меню не показывает вообще (see errors.safe_handler —
         # он же блокирует и остальные разделы для этого пользователя).
@@ -176,7 +178,7 @@ def start_message(message):
 def handle_consent_accept(call):
     """Пользователь нажал '✅ Принимаю' — фиксируем согласие и открываем меню."""
     user_id = call.from_user.id
-    state.set_consent_given(user_id)
+    consent_db.give_consent(user_id)
     analytics.log_event(user_id, call.from_user.username, "consent_accepted")
 
     # Убираем кнопку из уже показанного уведомления и помечаем его принятым —
@@ -229,13 +231,13 @@ def handle_catlist(call):
     bot.answer_callback_query(call.id)
 
 
-# ---------- Военные Сундуки (паки) ----------
-# Готовые наборы товаров со скидкой 15%. Данные лежат в packs.py.
-# ВАЖНО: живут внутри раздела Орден. Состав пака можно посмотреть без
-# подписки, но добавить пак в корзину может только подписчик Ордена —
-# см. subscriptions_db.has_active_subscription. Пак кладётся в корзину
-# как единая позиция (виртуальный товар id из PACK_ID_OFFSET+) —
-# см. packs.pack_as_cart_item и cart._lookup.
+# ---------- Военные Сундуки — тарифы подписки Ордена ----------
+# ВАЖНО: паки ("Базовый"/"Продвинутый"/"Премиум") — это И ЕСТЬ подписка
+# Ордена, а не отдельная фича поверх обычных заказов. Пользователь платит
+# за годовую подписку на конкретный тариф — раз в 2 месяца (6 раз в год)
+# ему по этому тарифу приходит доставка. Поэтому тариф НЕ кладётся
+# в корзину и не идёт через обычный checkout — выбор тарифа сразу
+# запускает оплату подписки на сайте (см. handle_subscribe_pay).
 
 
 def _pack_intro_text() -> str:
@@ -244,21 +246,19 @@ def _pack_intro_text() -> str:
     _diamond= f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
     return (
         f"{_shield} <b>Военные Сундуки</b>\n\n"
-        f"{_sword} Готовые наборы снаряжения для соратников любого ранга.\n"
-        f"В каждом — только проверенные бренды из наших складов.\n"
-        f"{_diamond} Забирая сундук целиком, ты экономишь <b>15%</b> "
-        f"против розницы и получаешь позиции, которых нет в обычной "
-        f"лавке.\n\n"
-        f"Состав можно посмотреть свободно — но забрать сундук в поход "
-        f"может только соратник, состоящий в Ордене.\n\n"
-        f"Выбери свой ранг:"
+        f"{_sword} Три тарифа годовой подписки Ордена. Раз в 2 месяца "
+        f"(шесть раз в год) тебе будет приходить доставка по выбранному "
+        f"тарифу.\n"
+        f"{_diamond} Цена в сравнении с розничной покупкой каждого товара "
+        f"по отдельности — со скидкой 15%.\n\n"
+        f"Состав каждого тарифа можно посмотреть свободно. Выбери свой ранг:"
     )
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "packs_list")
 @safe_handler(bot)
 def handle_packs_list(call):
-    """Показывает список из трёх паков. Точка входа — экран Ордена."""
+    """Показывает список из трёх тарифов. Точка входа — экран Ордена."""
     analytics.log_event(call.from_user.id, call.from_user.username, "view_packs")
     kb = keyboards.packs_list_keyboard_dict()
     result = emoji_ui.edit_message_with_emoji(
@@ -278,9 +278,9 @@ def handle_packs_list(call):
 
 def _pack_detail_text(pack: dict, has_subscription: bool) -> str:
     """
-    Карточка пака: тэглайн, состав с розничными ценами, итог по рознице,
-    цена набора со скидкой, экономия. Видна ВСЕГДА, независимо от подписки —
-    ограничение только на добавление в корзину (см. keyboards.pack_detail_keyboard_dict).
+    Карточка тарифа: тэглайн, состав с розничными ценами, итог по рознице,
+    цена подписки, экономия. Состав виден ВСЕГДА, независимо от подписки —
+    ограничение только на саму оплату (см. keyboards.pack_detail_keyboard_dict).
     """
     _shield  = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
     _sword   = f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji>'
@@ -288,10 +288,10 @@ def _pack_detail_text(pack: dict, has_subscription: bool) -> str:
     _scroll  = f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji>'
 
     lines = [
-        f"{_shield} <b>Сундук «{pack['name']}»</b>",
+        f"{_shield} <b>Тариф «{pack['name']}»</b>",
         f"<i>{pack['tagline']}</i>",
         "",
-        f"{_scroll} <b>Что внутри:</b>",
+        f"{_scroll} <b>Что входит в каждую доставку:</b>",
     ]
     for item in pack["items"]:
         lines.append(
@@ -300,13 +300,15 @@ def _pack_detail_text(pack: dict, has_subscription: bool) -> str:
     lines.extend([
         "",
         f"Розница поштучно: <s>{pack['retail_total']} ₽</s>",
-        f"{_diamond} <b>Цена сундука: {pack['bundle_price']} ₽</b>",
+        f"{_diamond} <b>Стоимость подписки: {pack['bundle_price']} ₽/год</b>",
         f"Экономия: <b>{pack['savings']} ₽</b> (−15%)",
+        "",
+        "Доставки — раз в 2 месяца, 6 раз в год.",
     ])
-    if not has_subscription:
+    if has_subscription:
         lines.extend([
             "",
-            f"{_shield} <i>Чтобы забрать сундук, нужна подписка Ордена.</i>",
+            f"{_diamond} <i>Ты уже состоишь в Ордене.</i>",
         ])
     return "\n".join(lines)
 
@@ -314,11 +316,11 @@ def _pack_detail_text(pack: dict, has_subscription: bool) -> str:
 @bot.callback_query_handler(func=lambda c: c.data.startswith("pack:"))
 @safe_handler(bot)
 def handle_pack_detail(call):
-    """Показывает состав пака всем; кнопка добавления зависит от подписки."""
+    """Показывает состав тарифа всем; кнопка оплаты зависит от подписки."""
     pack_id = int(call.data.split(":")[1])
     pack = packs.get_pack(pack_id)
     if not pack:
-        bot.answer_callback_query(call.id, "Такого сундука нет")
+        bot.answer_callback_query(call.id, "Такого тарифа нет")
         return
 
     has_sub = subscriptions_db.has_active_subscription(call.from_user.id)
@@ -331,31 +333,66 @@ def handle_pack_detail(call):
     bot.answer_callback_query(call.id)
 
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("pack_add:"))
+@bot.callback_query_handler(func=lambda c: c.data.startswith("subscribe_pay:"))
 @safe_handler(bot)
-def handle_pack_add(call):
+def handle_pack_subscribe(call):
     """
-    Кладёт пак в корзину как единую позицию. Требует активную подписку
-    Ордена — проверка ЗДЕСЬ дублирует скрытие кнопки в клавиатуре
-    намеренно (defense in depth): даже если у пользователя осталась
-    старая клавиатура с кнопкой добавления после истечения подписки,
-    сервер всё равно не пустит.
+    Оформление подписки Ордена на выбранный тариф. НЕ кладёт ничего
+    в корзину — сразу запрашивает у сайта ссылку на оплату годовой
+    подписки этого тарифа (аналогично handle_checkout, но для подписки).
     """
     pack_id = int(call.data.split(":")[1])
     pack = packs.get_pack(pack_id)
     if not pack:
-        bot.answer_callback_query(call.id, "Такого сундука нет")
+        bot.answer_callback_query(call.id, "Такого тарифа нет")
         return
 
-    if not subscriptions_db.has_active_subscription(call.from_user.id):
-        bot.answer_callback_query(
-            call.id, "Нужна подписка Ордена, чтобы забрать сундук", show_alert=True,
+    user_id = call.from_user.id
+
+    if subscriptions_db.has_active_subscription(user_id):
+        bot.answer_callback_query(call.id, "Ты уже состоишь в Ордене")
+        return
+
+    # Запоминаем, какой именно тариф выбрал, ДО ухода на оплату — на
+    # случай если сайт при подтверждении оплаты не пришлёт pack_id обратно
+    # (см. subscriptions_db.record_pending_subscription).
+    subscriptions_db.record_pending_subscription(user_id, pack_id)
+
+    response = create_subscription_order(telegram_id=user_id, pack_id=pack_id)
+
+    if response.get("status") == "error" or not response.get("checkout_url"):
+        analytics.log_event(user_id, call.from_user.username, "subscription_checkout_failed", pack["name"])
+        _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
+        show_content(
+            call.message.chat.id,
+            user_id,
+            f"{_shield} <b>Оплата подписки временно недоступна.</b>\n\n"
+            "Эта функция ещё настраивается. Загляни чуть позже или "
+            "напиши в поддержку.",
+            parse_mode="HTML",
         )
+        bot.answer_callback_query(call.id, "Пока недоступно")
         return
 
-    cart.add_item(call.from_user.id, pack_id, qty=1)
-    analytics.log_event(call.from_user.id, call.from_user.username, "pack_added", pack["name"])
-    bot.answer_callback_query(call.id, f"Сундук «{pack['name']}» в корзине ⚔")
+    checkout_url = response["checkout_url"]
+    analytics.log_event(user_id, call.from_user.username, "subscription_checkout", pack["name"])
+
+    _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
+    text = (
+        f"{_diamond} <b>Оплата тарифа «{pack['name']}»</b>\n\n"
+        "Нажми кнопку ниже, чтобы завершить оплату на сайте. "
+        "Подписка активируется автоматически сразу после оплаты."
+    )
+    keyboard = emoji_ui.build_emoji_keyboard([[
+        emoji_ui.build_emoji_button(
+            "Перейти к оплате", url=checkout_url,
+            style="success", icon_custom_emoji_id=emoji_ids.DIAMOND,
+        )
+    ]])
+    result = emoji_ui.send_message_with_emoji(call.message.chat.id, text, reply_markup=keyboard)
+    if result.get("ok"):
+        state.set_content(user_id, result["result"]["message_id"])
+    bot.answer_callback_query(call.id)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("cat:"))
@@ -653,29 +690,29 @@ def handle_orders(message):
 
 # ---------- Орден: подписка + вход в Военные Сундуки ----------
 
-def _order_menu_text(has_subscription: bool, expires_at: str | None = None) -> str:
+def _order_menu_text(has_subscription: bool, sub: dict | None) -> str:
     _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
     _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
 
-    if has_subscription:
+    if has_subscription and sub:
         expires_str = ""
-        if expires_at:
-            try:
-                from datetime import datetime
-                dt = datetime.fromisoformat(expires_at)
-                expires_str = f" до {dt.strftime('%d.%m.%Y')}"
-            except Exception:
-                pass
-        status = f"{_diamond} <b>Ты состоишь в Ордене{expires_str}.</b>"
+        try:
+            from datetime import datetime
+            dt = datetime.fromisoformat(sub["expires_at"])
+            expires_str = f" до {dt.strftime('%d.%m.%Y')}"
+        except Exception:
+            pass
+        pack_name = sub.get("pack_name") or "неизвестный тариф"
+        status = f"{_diamond} <b>Ты состоишь в Ордене — тариф «{pack_name}»{expires_str}.</b>"
     else:
         status = f"{_shield} <b>Ты пока не в Ордене.</b>"
 
     return (
         f"{_shield} <b>Орден</b>\n\n"
         f"{status}\n\n"
-        "Годовая подписка с поставками раз в 60 дней. "
-        "Подписчикам Ордена доступны Военные Сундуки — готовые наборы "
-        "снаряжения со скидкой 15%."
+        "Годовая подписка с доставками раз в 2 месяца (6 раз в год). "
+        "Военные Сундуки — три тарифа на выбор, каждый с фиксированным "
+        "набором снаряжения на каждую доставку."
     )
 
 
@@ -686,7 +723,7 @@ def _show_order_menu(chat_id: int, user_id: int, message_id: int | None = None):
     """
     sub = subscriptions_db.get_subscription(user_id)
     has_sub = subscriptions_db.has_active_subscription(user_id)
-    text = _order_menu_text(has_sub, sub["expires_at"] if sub else None)
+    text = _order_menu_text(has_sub, sub)
     kb = keyboards.order_menu_keyboard_dict(has_sub)
 
     if message_id:
@@ -722,67 +759,15 @@ def handle_order_menu_button(message):
 @bot.callback_query_handler(func=lambda c: c.data == "order_menu")
 @safe_handler(bot)
 def handle_order_menu_callback(call):
-    """Возврат в Орден, например по кнопке 'В Орден' со списка паков."""
+    """Возврат в Орден, например по кнопке 'В Орден' со списка тарифов."""
     _show_order_menu(call.message.chat.id, call.from_user.id, call.message.message_id)
-    bot.answer_callback_query(call.id)
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "subscribe_pay")
-@safe_handler(bot)
-def handle_subscribe_pay(call):
-    """
-    Запрашивает у сайта оплату годовой подписки. Пока Фёдор не согласовал
-    отдельный эндпоинт для подписки (SITE_SUBSCRIPTION_ENDPOINT пуст) —
-    честно сообщаем пользователю, что раздел временно недоступен, вместо
-    того чтобы падать или зависать.
-    """
-    user_id = call.from_user.id
-
-    if subscriptions_db.has_active_subscription(user_id):
-        bot.answer_callback_query(call.id, "Подписка уже активна")
-        return
-
-    response = create_subscription_order(telegram_id=user_id)
-
-    if response.get("status") == "error" or not response.get("checkout_url"):
-        analytics.log_event(user_id, call.from_user.username, "subscription_checkout_failed", "site error")
-        _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
-        show_content(
-            call.message.chat.id,
-            user_id,
-            f"{_shield} <b>Оплата подписки временно недоступна.</b>\n\n"
-            "Эта функция ещё настраивается. Загляни чуть позже или "
-            "напиши в поддержку.",
-            parse_mode="HTML",
-        )
-        bot.answer_callback_query(call.id, "Пока недоступно")
-        return
-
-    checkout_url = response["checkout_url"]
-    analytics.log_event(user_id, call.from_user.username, "subscription_checkout", checkout_url)
-
-    _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
-    text = (
-        f"{_diamond} <b>Оплата подписки Ордена</b>\n\n"
-        "Нажми кнопку ниже, чтобы завершить оплату на сайте. "
-        "Подписка активируется автоматически сразу после оплаты."
-    )
-    keyboard = emoji_ui.build_emoji_keyboard([[
-        emoji_ui.build_emoji_button(
-            "Перейти к оплате", url=checkout_url,
-            style="success", icon_custom_emoji_id=emoji_ids.DIAMOND,
-        )
-    ]])
-    result = emoji_ui.send_message_with_emoji(call.message.chat.id, text, reply_markup=keyboard)
-    if result.get("ok"):
-        state.set_content(user_id, result["result"]["message_id"])
     bot.answer_callback_query(call.id)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "noop")
 @safe_handler(bot)
 def handle_noop(call):
-    """Кнопка-статус без действия (например, 'Подписка активна')."""
+    """Кнопка-статус без действия (например, 'Ты уже в Ордене')."""
     bot.answer_callback_query(call.id)
 
 
@@ -814,6 +799,48 @@ def handle_settings_consent(call):
         reply_markup=keyboards.settings_consent_back_keyboard_dict(),
     )
     bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "settings:revoke_confirm")
+@safe_handler(bot)
+def handle_settings_revoke_confirm(call):
+    """Промежуточный шаг — не отзываем по одному тапу, сначала подтверждение."""
+    _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
+    emoji_ui.edit_message_with_emoji(
+        call.message.chat.id, call.message.message_id,
+        f"{_shield} <b>Точно отозвать согласие?</b>\n\n"
+        "После этого бот перестанет отвечать на любые действия, пока ты "
+        "не примешь условия заново через /start.",
+        reply_markup=keyboards.settings_revoke_confirm_keyboard_dict(),
+    )
+    bot.answer_callback_query(call.id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "settings:revoke_do")
+@safe_handler(bot)
+def handle_settings_revoke_do(call):
+    """
+    Реально отзывает согласие. С этого момента safe_handler блокирует
+    ВСЕ разделы бота для этого пользователя, кроме /start — там ему
+    заново предложат принять условия (см. consent_db.has_consent и
+    errors.safe_handler).
+    """
+    user_id = call.from_user.id
+    consent_db.revoke_consent(user_id)
+    # Чтобы следующий /start прислал СВЕЖЕЕ сообщение с кнопкой "Принимаю",
+    # а не сослался на старое (там кнопка уже убрана после первого принятия).
+    state.clear_consent_message(user_id)
+    analytics.log_event(user_id, call.from_user.username, "consent_revoked")
+
+    _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
+    emoji_ui.edit_message_with_emoji(
+        call.message.chat.id, call.message.message_id,
+        f"{_shield} <b>Согласие отозвано.</b>\n\n"
+        "Бот больше не будет отвечать на действия. Чтобы продолжить "
+        "пользоваться сервисом — напиши /start и прими условия заново.",
+        reply_markup={"inline_keyboard": []},
+    )
+    bot.answer_callback_query(call.id, "Согласие отозвано")
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "settings:back")
@@ -1000,6 +1027,32 @@ def handle_free_text(message):
     )
 
 
+def run_startup_healthcheck():
+    """
+    Настоящая диагностика сервера вместо слепого "Бот запущен" на каждый
+    рестарт. Уведомляет админа только при смене статуса (см. health_check.py) —
+    это убирает спам, если хостинг периодически перезапускает процесс
+    (crash loop) при чистом здоровом сервере.
+
+    Вызывается и из main.py (запуск для разработки), и из run.py
+    (продакшен-точка входа) — чтобы диагностика работала в обоих случаях.
+    """
+    if not ADMIN_CHAT_ID:
+        print(
+            "ℹ️ ADMIN_CHAT_ID не задан в .env — уведомления об ошибках, статусе "
+            "сервера и пересылка вопросов в поддержку работать не будут."
+        )
+        return
+
+    result = health_check.check_and_notify(bot, BOT_TOKEN, ADMIN_CHAT_ID)
+    if result["ok"]:
+        print("✅ Проверка сервера пройдена:")
+    else:
+        print("⚠️ Проверка сервера обнаружила проблемы:")
+    for detail in result["details"]:
+        print(f"   • {detail}")
+
+
 if __name__ == "__main__":
     # Регистрируем /start в системном списке команд Telegram (иконка "/"
     # рядом с полем ввода). Это некритично — если таймаут или ошибка —
@@ -1013,31 +1066,9 @@ if __name__ == "__main__":
         print(f"⚠️ Не удалось зарегистрировать /start: {e}")
         print("   Бот всё равно запустится, просто команда не будет видна в '/' меню.")
 
-    # Самопроверка уведомлений: сразу видно в консоли, реально ли долетит
-    # сообщение до администратора, а не только после первой настоящей ошибки.
+    run_startup_healthcheck()
     if ADMIN_CHAT_ID:
-        try:
-            bot.send_message(
-                ADMIN_CHAT_ID,
-                "✅ Бот запущен. Если ты видишь это сообщение — уведомления об ошибках "
-                "и пересылка вопросов из поддержки настроены правильно.",
-            )
-            print(f"✅ Тестовое сообщение отправлено на ADMIN_CHAT_ID={ADMIN_CHAT_ID}")
-        except Exception as e:
-            print(f"⚠️ НЕ удалось отправить сообщение на ADMIN_CHAT_ID={ADMIN_CHAT_ID}: {e}")
-            print(
-                "   Частые причины:\n"
-                "   1) с этого Telegram-аккаунта ни разу не нажимали /start именно этому "
-                "боту — Telegram не разрешает ботам писать первыми тем, кто с ними ещё "
-                "не взаимодействовал;\n"
-                "   2) ADMIN_CHAT_ID указан неверно — нужен числовой user_id "
-                "(его даёт @userinfobot), а не @username и не номер телефона."
-            )
-    else:
-        print(
-            "ℹ️ ADMIN_CHAT_ID не задан в .env — уведомления об ошибках и пересылка "
-            "вопросов в поддержку работать не будут."
-        )
+        health_check.start_periodic_check(bot, BOT_TOKEN, ADMIN_CHAT_ID)
 
     print("Бот запущен... (для остановки нажми Ctrl+C)")
     logger.info("Бот запущен")

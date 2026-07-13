@@ -4,10 +4,14 @@
 Для продакшена (много пользователей, важно не терять корзину) нужно
 перенести это в базу данных (SQLite/PostgreSQL) — это отдельный
 следующий шаг, не входит в текущий MVP.
+
+ВАЖНО: паки ("Военные Сундуки") сюда НЕ попадают — это тарифы подписки
+Ордена, они оплачиваются напрямую на сайте (см. main.py,
+handle_pack_subscribe), минуя корзину. Корзина работает только
+с обычными товарами каталога.
 """
 
 from products import PRODUCTS_BY_ID
-import packs
 
 # {user_id: {product_id: qty}}
 _carts: dict[int, dict[int, int]] = {}
@@ -36,32 +40,21 @@ def cart_count(user_id: int) -> int:
     return sum(get_cart(user_id).values())
 
 
-def _lookup(item_id: int) -> dict | None:
-    """
-    Универсальный поиск позиции — сначала среди обычных товаров,
-    потом среди паков. Так cart.py становится независим от того,
-    что именно лежит в корзине.
-    """
-    if packs.is_pack_id(item_id):
-        return packs.pack_as_cart_item(item_id)
-    return PRODUCTS_BY_ID.get(item_id)
-
-
 def cart_total(user_id: int) -> int:
     cart = get_cart(user_id)
     total = 0
     for pid, qty in cart.items():
-        item = _lookup(pid)
-        if item:
-            total += item["price"] * qty
+        product = PRODUCTS_BY_ID.get(pid)
+        if product:
+            total += product["price"] * qty
     return total
 
 
 def cart_text(user_id: int) -> str:
     """
-    HTML-текст корзины с кастомными эмодзи (⚔️ у товаров, 🛡 у сундуков).
-    Используется в обработчике 'Корзина' в main.py — там отправляется с parse_mode
-    и через emoji_ui, так что HTML-теги здесь корректны.
+    HTML-текст корзины с кастомными эмодзи. Используется в обработчике
+    'Корзина' в main.py — там отправляется через emoji_ui, так что
+    HTML-теги здесь корректны.
     """
     import emoji_ids as _e
     _sword = f'<tg-emoji emoji-id="{_e.SWORD}">⚔️</tg-emoji>'
@@ -74,10 +67,9 @@ def cart_text(user_id: int) -> str:
 
     lines = [f"{_shield} <b>Твоя оружейная:</b>\n"]
     for pid, qty in cart.items():
-        item = _lookup(pid)
-        if not item:
+        product = PRODUCTS_BY_ID.get(pid)
+        if not product:
             continue
-        icon = _shield if packs.is_pack_id(pid) else _sword
-        lines.append(f"{icon} {item['name']} — {qty} шт. × {item['price']} ₽ = <b>{item['price'] * qty} ₽</b>")
+        lines.append(f"{_sword} {product['name']} — {qty} шт. × {product['price']} ₽ = <b>{product['price'] * qty} ₽</b>")
     lines.append(f"\n{_diamond} <b>Итого: {cart_total(user_id)} ₽</b>")
     return "\n".join(lines)

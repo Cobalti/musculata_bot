@@ -103,9 +103,11 @@ def catalog_page_keyboard_dict(page: int, user_id: int, cat_idx: int) -> dict:
         in_cart = product["id"] in cart_ids
         # Знак наличия в корзине — обычным префиксом в тексте (эмодзи-иконка
         # у кнопки одна на кнопку, поэтому статус пишем словами/символом).
+        # Цену намеренно не показываем здесь — она появляется только на
+        # карточке товара после нажатия (там же фото и полное описание).
         prefix = "✓ " if in_cart else ""
         rows.append([emoji_ui.build_emoji_button(
-            f"{prefix}{product['name']} — {product['price']} ₽",
+            f"{prefix}{product['name']}",
             callback_data=f"view:{product['id']}:{page}:{cat_idx}",
             icon_custom_emoji_id=emoji_ids.SWORD,
         )])
@@ -181,40 +183,50 @@ def settings_keyboard_dict() -> dict:
 
 
 def settings_consent_back_keyboard_dict() -> dict:
-    """Кнопка 'Назад' на экране просмотра ранее принятого согласия."""
-    return emoji_ui.build_emoji_keyboard([[
-        emoji_ui.build_emoji_button(
+    """
+    Экран просмотра ранее принятого согласия: кнопка отзыва (ведёт на
+    подтверждение — отзыв это серьёзное действие, блокирующее весь бот)
+    и кнопка назад.
+    """
+    return emoji_ui.build_emoji_keyboard([
+        [emoji_ui.build_emoji_button(
+            "Отозвать согласие", callback_data="settings:revoke_confirm",
+            icon_custom_emoji_id=emoji_ids.SHIELD, style="danger",
+        )],
+        [emoji_ui.build_emoji_button(
             "Назад", callback_data="settings:back",
             icon_custom_emoji_id=emoji_ids.SCROLL,
-        )
-    ]])
+        )],
+    ])
+
+
+def settings_revoke_confirm_keyboard_dict() -> dict:
+    """Подтверждение отзыва — отдельный шаг, чтобы не отозвать случайным тапом."""
+    return emoji_ui.build_emoji_keyboard([
+        [emoji_ui.build_emoji_button(
+            "Да, отозвать", callback_data="settings:revoke_do",
+            icon_custom_emoji_id=emoji_ids.SHIELD, style="danger",
+        )],
+        [emoji_ui.build_emoji_button(
+            "Отмена", callback_data="settings:consent",
+            icon_custom_emoji_id=emoji_ids.SCROLL,
+        )],
+    ])
 
 
 # ---------- Корзина ----------
 
 def cart_keyboard_dict(user_id: int) -> dict:
-    """
-    Корзина: каждая позиция — своя кнопка с 'убрать',
-    внизу — кнопка оформления. Умеет и обычные товары, и паки.
-    """
+    """Корзина: каждая позиция — своя кнопка с 'убрать', внизу — кнопка оформления."""
     cart = get_cart(user_id)
     rows = []
     for pid, qty in cart.items():
-        if packs.is_pack_id(pid):
-            pack = packs.get_pack(pid)
-            if not pack:
-                continue
-            label = f"Убрать сундук «{pack['name']}» ({qty} шт.)"
-            icon = emoji_ids.SHIELD
-        else:
-            product = PRODUCTS_BY_ID.get(pid)
-            if not product:
-                continue
-            label = f"Убрать {product['name']} ({qty} шт.)"
-            icon = emoji_ids.SWORD
+        product = PRODUCTS_BY_ID.get(pid)
+        if not product:
+            continue
         rows.append([emoji_ui.build_emoji_button(
-            label, callback_data=f"remove:{pid}",
-            icon_custom_emoji_id=icon, style="danger",
+            f"Убрать {product['name']} ({qty} шт.)", callback_data=f"remove:{pid}",
+            icon_custom_emoji_id=emoji_ids.SWORD, style="danger",
         )])
     if cart:
         rows.append([emoji_ui.build_emoji_button(
@@ -236,40 +248,32 @@ def consent_keyboard_dict() -> dict:
     ]])
 
 
-# ---------- Орден: статус подписки + вход в Военные Сундуки ----------
+# ---------- Орден: статус подписки + вход в тарифы (Военные Сундуки) ----------
 
 def order_menu_keyboard_dict(has_subscription: bool) -> dict:
     """
-    Главный экран Ордена: кнопка входа в Военные Сундуки (доступна всегда —
-    состав посмотреть можно без подписки) и кнопка оплаты/статуса подписки.
+    Главный экран Ордена. Единственная кнопка входа — 'Военные Сундуки':
+    там пользователь смотрит тарифы и, если ещё не подписан, оформляет
+    подписку прямо на выбранном тарифе (см. pack_detail_keyboard_dict).
+    Отдельной общей кнопки оплаты больше нет — паки И ЕСТЬ подписка,
+    оплата всегда привязана к конкретному тарифу.
     """
-    rows = [
+    return emoji_ui.build_emoji_keyboard([
         [emoji_ui.build_emoji_button(
             "Военные Сундуки", callback_data="packs_list",
             icon_custom_emoji_id=emoji_ids.SHIELD,
         )],
-    ]
-    if has_subscription:
-        rows.append([emoji_ui.build_emoji_button(
-            "Подписка активна", callback_data="noop",
-            icon_custom_emoji_id=emoji_ids.DIAMOND, style="success",
-        )])
-    else:
-        rows.append([emoji_ui.build_emoji_button(
-            "Оплатить подписку", callback_data="subscribe_pay",
-            icon_custom_emoji_id=emoji_ids.DIAMOND, style="success",
-        )])
-    return emoji_ui.build_emoji_keyboard(rows)
+    ])
 
 
-# ---------- Военные Сундуки (паки) ----------
+# ---------- Военные Сундуки — тарифы подписки Ордена ----------
 
 def packs_list_keyboard_dict() -> dict:
-    """Три сундука на выбор + возврат в Орден."""
+    """Три тарифа на выбор + возврат в Орден. Цена — за год подписки."""
     rows = []
     for pack in packs.PACKS:
         rows.append([emoji_ui.build_emoji_button(
-            f"{pack['name']} — {pack['bundle_price']} ₽",
+            f"{pack['name']} — {pack['bundle_price']} ₽/год",
             callback_data=f"pack:{pack['id']}",
             icon_custom_emoji_id=emoji_ids.SHIELD,
         )])
@@ -282,19 +286,23 @@ def packs_list_keyboard_dict() -> dict:
 
 def pack_detail_keyboard_dict(pack_id: int, has_subscription: bool) -> dict:
     """
-    Под карточкой сундука. Состав виден всем — но добавить в корзину
-    может только подписчик Ордена. Без подписки вместо кнопки добавления
-    показывается кнопка перехода к оплате подписки.
+    Под карточкой тарифа. Состав виден всем без ограничений. Если
+    подписки ещё нет — кнопка сразу запускает оплату ИМЕННО этого тарифа
+    (никакой корзины, оплата на сайте). Если подписка уже активна
+    (на любом тарифе) — вместо оплаты статус-кнопка без действия,
+    повторно оформить нельзя, пока текущая подписка не истечёт.
     """
     if has_subscription:
         action_row = [emoji_ui.build_emoji_button(
-            "Взять сундук в поход", callback_data=f"pack_add:{pack_id}",
+            "Ты уже в Ордене", callback_data="noop",
             icon_custom_emoji_id=emoji_ids.DIAMOND, style="success",
         )]
     else:
+        pack = packs.get_pack(pack_id)
+        price = pack["bundle_price"] if pack else "?"
         action_row = [emoji_ui.build_emoji_button(
-            "Нужна подписка Ордена", callback_data="subscribe_pay",
-            icon_custom_emoji_id=emoji_ids.SHIELD, style="primary",
+            f"Оформить подписку — {price} ₽/год", callback_data=f"subscribe_pay:{pack_id}",
+            icon_custom_emoji_id=emoji_ids.DIAMOND, style="success",
         )]
     return emoji_ui.build_emoji_keyboard([
         action_row,

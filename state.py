@@ -61,17 +61,12 @@ def get_support_thread(admin_message_id: int):
 
 
 # ---------- Согласие на обработку персональных данных ----------
+# ВАЖНО: сам факт согласия/отзыва теперь хранится в consent_db.py
+# (персистентно, переживает перезапуск бота). Здесь остаётся только
+# message_id уведомления с условиями — чтобы не слать его повторно,
+# пока пользователь ещё не нажал "Принимаю" в рамках одной сессии.
 
-_consent_given: set[int] = set()        # user_id, кто уже нажал "Принимаю"
 _consent_message: dict[int, int] = {}   # user_id -> message_id сообщения с условиями
-
-
-def set_consent_given(user_id: int):
-    _consent_given.add(user_id)
-
-
-def has_given_consent(user_id: int) -> bool:
-    return user_id in _consent_given
 
 
 def set_consent_message(user_id: int, message_id: int):
@@ -80,3 +75,13 @@ def set_consent_message(user_id: int, message_id: int):
 
 def get_consent_message(user_id: int):
     return _consent_message.get(user_id)
+
+
+def clear_consent_message(user_id: int):
+    """
+    Вызывается при отзыве согласия (Настройки → Отозвать согласие) —
+    чтобы при следующем /start бот отправил СВЕЖЕЕ сообщение с кнопкой
+    "Принимаю", а не сослался на старое (в котором кнопка уже убрана
+    после первого принятия).
+    """
+    _consent_message.pop(user_id, None)

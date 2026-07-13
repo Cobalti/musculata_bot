@@ -119,7 +119,12 @@ def payment_success():
         return jsonify({"error": "bad payload"}), 400
 
     if payment_type == "subscription":
-        subscriptions_db.activate_subscription(telegram_id, site_order_id=order_id)
+        # bundle_id — если сайт вернёт его в вебхуке (согласно предложению
+        # Фёдора завести понятие "набор/бандл"). Если поля нет —
+        # activate_subscription сам возьмёт тариф из pending_subscriptions
+        # (то, что пользователь выбрал перед уходом на оплату).
+        bundle_id = data.get("bundle_id")
+        subscriptions_db.activate_subscription(telegram_id, site_order_id=order_id, pack_id=bundle_id)
         text = (
             f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji> '
             f"Оплата подписки Ордена на сумму {total} ₽ успешно получена! "
