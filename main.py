@@ -5,7 +5,7 @@ import os
 import telebot
 from telebot import types
 
-from config import BOT_TOKEN, ADMIN_CHAT_ID
+from config import BOT_TOKEN, BOT_USERNAME, ADMIN_CHAT_ID
 from products import PRODUCTS_BY_ID, category_by_index
 import keyboards
 from keyboards import ALL_CATEGORIES
@@ -19,6 +19,7 @@ from checkout import price_breakdown
 from integrations import create_order, create_subscription_order
 import orders_db
 import subscriptions_db
+import referrals_db
 import consent_db
 import health_check
 import emoji_ui
@@ -115,6 +116,51 @@ def edit_content(chat_id, message_id, text, reply_markup=None, parse_mode="HTML"
         return None
 
 
+def _handle_referral_start_param(message):
+    """
+    Разбирает /start с параметром из ссылки t.me/<bot>?start=<referrer_id>
+    (Telegram превращает такую ссылку в текст сообщения "/start 123456789").
+
+    Реферальная связь фиксируется ТОЛЬКО для совсем новых пользователей —
+    если у этого telegram_id уже есть согласие на ОПД (то есть он раньше
+    пользовался ботом), это не "новый клиент", связь не создаём.
+    """
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2:
+        return
+    param = parts[1].strip()
+    if not param.isdigit():
+        return
+
+    referrer_id = int(param)
+    invitee_id = message.from_user.id
+
+    if consent_db.has_consent(invitee_id):
+        return
+
+    success, reason = referrals_db.register_referral(referrer_id, invitee_id)
+    if not success:
+        logger.info(
+            "Реферальная связь не создана (referrer=%s invitee=%s): %s",
+            referrer_id, invitee_id, reason,
+        )
+        return
+
+    analytics.log_event(invitee_id, message.from_user.username, "referral_registered", f"referrer={referrer_id}")
+
+    _sword = f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji>'
+    try:
+        bot.send_message(
+            referrer_id,
+            f"{_sword} <b>По твоей ссылке присоединился новый соратник!</b>\n\n"
+            f"Как только он оформит и оплатит свой первый заказ — тебе "
+            f"начислится {referrals_db.REFERRAL_BONUS_RUB} ₽ бонуса.",
+            parse_mode="HTML",
+        )
+    except Exception:
+        logger.warning("Не удалось уведомить пригласившего user_id=%s о новом реферале", referrer_id)
+
+
 # ---------- Старт: согласие на обработку ПД + меню создаётся один раз ----------
 
 @bot.message_handler(commands=["start"])
@@ -126,6 +172,8 @@ def start_message(message):
     state.clear_awaiting_support(user_id)
 
     analytics.log_event(user_id, message.from_user.username, "start")
+
+    _handle_referral_start_param(message)
 
     if not consent_db.has_consent(user_id):
         # Жёсткий вариант согласия: без нажатия кнопки "Принимаю" бот
@@ -552,10 +600,19 @@ def handle_checkout(call):
 
     items_list = list(user_cart.keys())
 
+    # Если пользователя кто-то пригласил и он ещё не сделал ни одного
+    # оплаченного заказа (статус связи 'pending') — на этот заказ идёт
+    # реферальная скидка вместо обычной. ЖДЁМ ОТ ФЁДОРА: распознаёт ли
+    # сайт код REF10 отдельно от TELEGRAM10, или нужно передавать что-то
+    # другое — пока это просто наша сторона логики, готовая к согласованию.
+    referral = referrals_db.get_referral(user_id)
+    is_referred_pending = referral is not None and referral["status"] == "pending"
+    promo_code = "REF10" if is_referred_pending else "TELEGRAM10"
+
     response = create_order(
         telegram_id=user_id,
         items=items_list,
-        promotions="TELEGRAM10",
+        promotions=promo_code,
     )
 
     if response.get("status") == "error" or not response.get("checkout_url"):
@@ -626,21 +683,52 @@ def handle_checkout(call):
     cart.clear_cart(user_id)
 
 
-# ---------- Заглушки для будущих разделов ----------
+# ---------- Пригласить соратника (реферальная система) ----------
 
 @bot.message_handler(func=lambda m: m.text == keyboards.BTN_INVITE)
 @safe_handler(bot)
-def handle_invite_stub(message):
+def handle_invite(message):
     delete_user_message(message)
     state.clear_awaiting_support(message.from_user.id)
-    show_content(
-        message.chat.id,
-        message.from_user.id,
-        f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji> Реферальная система в разработке. '
-        "Скоро здесь появится твоя личная ссылка для приглашения соратников "
-        "и бонусы за каждого приведённого воина.",
-        parse_mode="HTML",
+    user_id = message.from_user.id
+
+    _sword = f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji>'
+    _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
+    _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
+
+    invited_count = referrals_db.count_invites(user_id)
+    balance = referrals_db.get_balance(user_id)
+
+    if BOT_USERNAME:
+        link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
+        link_line = f"{_sword} Твоя ссылка:\n<code>{link}</code>"
+    else:
+        # На случай, если BOT_USERNAME ещё не заполнен в .env — не ломаем
+        # экран, просто честно предупреждаем вместо показа битой ссылки.
+        link_line = (
+            f"{_shield} <i>Ссылка временно недоступна — не задан BOT_USERNAME "
+            f"в настройках бота.</i>"
+        )
+
+    limit_line = (
+        f"Приглашено: {invited_count}/{referrals_db.MAX_INVITES_PER_REFERRER}"
+        if invited_count < referrals_db.MAX_INVITES_PER_REFERRER
+        else f"{_shield} Лимит приглашений исчерпан ({referrals_db.MAX_INVITES_PER_REFERRER}/{referrals_db.MAX_INVITES_PER_REFERRER})"
     )
+
+    text = (
+        f"{_sword} <b>Пригласить соратника</b>\n\n"
+        f"Отправь другу свою ссылку. Как только он присоединится и оформит "
+        f"первый оплаченный заказ:\n"
+        f"• он получит скидку 10% на этот заказ;\n"
+        f"• тебе начислится {referrals_db.REFERRAL_BONUS_RUB} ₽ бонуса.\n\n"
+        f"Можно пригласить максимум {referrals_db.MAX_INVITES_PER_REFERRER} человек.\n\n"
+        f"{link_line}\n\n"
+        f"{limit_line}\n"
+        f"{_diamond} Накоплено бонусов: {balance} ₽"
+    )
+
+    show_content(message.chat.id, user_id, text, parse_mode="HTML")
 
 
 STATUS_LABELS = {

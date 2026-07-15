@@ -29,6 +29,7 @@ import hmac
 
 import orders_db
 import subscriptions_db
+import referrals_db
 import emoji_ids
 
 logger = logging.getLogger("webhooks")
@@ -149,6 +150,31 @@ def payment_success():
         f"Оплата заказа #{order_id} на сумму {total} ₽ успешно получена! Спасибо за покупку."
     )
     _notify(telegram_id, text, parse_mode="HTML")
+
+    # Реферальная система: если это ПЕРВЫЙ оплаченный заказ приглашённого
+    # пользователя — начисляем бонус пригласившему и уведомляем обоих.
+    # mark_converted сам защищён от повторного начисления (см. referrals_db.py),
+    # поэтому безопасно вызывать на каждый payment-success без доп. проверок.
+    referrer_id = referrals_db.mark_converted(telegram_id)
+    if referrer_id:
+        _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
+        _sword = f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji>'
+        _notify(
+            referrer_id,
+            f"{_diamond} <b>Твой соратник оплатил первый заказ!</b>\n\n"
+            f"Тебе начислено {referrals_db.REFERRAL_BONUS_RUB} ₽ бонуса.",
+            parse_mode="HTML",
+        )
+        _notify(
+            telegram_id,
+            f"{_sword} Скидка за приглашение применена — спасибо, что присоединился "
+            f"по ссылке соратника!",
+            parse_mode="HTML",
+        )
+        logger.info(
+            "Реферал конвертирован через payment-success: invitee=%s referrer=%s order_id=%s",
+            telegram_id, referrer_id, order_id,
+        )
 
     logger.info("payment-success обработан: telegram_id=%s order_id=%s total=%s", telegram_id, order_id, total)
     return jsonify({"status": "ok"}), 200
