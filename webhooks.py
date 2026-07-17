@@ -69,6 +69,38 @@ def _notify(telegram_id: int, text: str, parse_mode: str | None = None):
         logger.error("Не удалось отправить сообщение telegram_id=%s: %s", telegram_id, e)
 
 
+def _handle_referral_conversion(invitee_id: int):
+    """
+    Вызывается после успешной оплаты ПОДПИСКИ приглашённым пользователем.
+    Засчитывает конверсию и уведомляет обоих. Ступени (1/3/6) берутся
+    из referrals_db; что за них даётся — заказчик ещё не определил,
+    поэтому пока уведомляем о самом факте достижения.
+    """
+    result = referrals_db.mark_converted(invitee_id)
+    if not result:
+        return
+
+    _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
+    _sword = f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji>'
+
+    referrer_id = result["referrer_id"]
+    count = result["converted_count"]
+
+    text = (
+        f"{_sword} <b>Твой соратник вступил в Орден!</b>\n\n"
+        f"Всего по твоим приглашениям вступили: <b>{count}</b>."
+    )
+    if result["milestone_reached"]:
+        reward = result["reward"]
+        text += f"\n\n{_diamond} <b>Ты достиг ступени {result['milestone_reached']}!</b>"
+        if reward:
+            text += f"\n{reward}"
+    _notify(referrer_id, text, parse_mode="HTML")
+
+    logger.info("Реферал конвертирован: invitee=%s referrer=%s всего=%s",
+                 invitee_id, referrer_id, count)
+
+
 @app.route("/webhook/missing-items", methods=["POST"])
 def missing_items():
     if not _check_secret(request):
@@ -120,19 +152,31 @@ def payment_success():
         return jsonify({"error": "bad payload"}), 400
 
     if payment_type == "subscription":
-        # bundle_id — если сайт вернёт его в вебхуке (согласно предложению
-        # Фёдора завести понятие "набор/бандл"). Если поля нет —
-        # activate_subscription сам возьмёт тариф из pending_subscriptions
+        # tier_id — если сайт вернёт его в вебхуке. Если поля нет —
+        # activate_subscription сам возьмёт уровень из pending_subscriptions
         # (то, что пользователь выбрал перед уходом на оплату).
-        bundle_id = data.get("bundle_id")
-        subscriptions_db.activate_subscription(telegram_id, site_order_id=order_id, pack_id=bundle_id)
-        text = (
+        tier_id = data.get("tier_id")
+        subscriptions_db.activate_subscription(telegram_id, site_order_id=order_id, tier_id=tier_id)
+
+        sub = subscriptions_db.get_subscription(telegram_id)
+        tier_name = sub.get("tier_name") if sub else "Орден"
+        _notify(
+            telegram_id,
             f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji> '
-            f"Оплата подписки Ордена на сумму {total} ₽ успешно получена! "
-            f"Добро пожаловать в Орден — теперь тебе доступны Военные Сундуки."
+            f"<b>Добро пожаловать в Орден!</b>\n\n"
+            f"Уровень «{tier_name}» активирован, оплата {total} ₽ получена.\n"
+            f"Теперь тебе доступны все привилегии ранга — загляни в раздел "
+            f"«Орден», чтобы посмотреть детали.",
+            parse_mode="HTML",
         )
-        _notify(telegram_id, text, parse_mode="HTML")
-        logger.info("payment-success (подписка) обработан: telegram_id=%s order_id=%s", telegram_id, order_id)
+
+        # Реферальная конверсия засчитывается именно по ПОДПИСКЕ (по Excel
+        # бонус приглашённому — скидка на первую годовую подписку).
+        # mark_converted защищён от повторного вебхука.
+        _handle_referral_conversion(telegram_id)
+
+        logger.info("payment-success (подписка): telegram_id=%s order_id=%s tier=%s",
+                     telegram_id, order_id, tier_name)
         return jsonify({"status": "ok"}), 200
 
     updated = orders_db.mark_order_paid(site_order_id=order_id, telegram_id=telegram_id, total=total)
@@ -150,31 +194,6 @@ def payment_success():
         f"Оплата заказа #{order_id} на сумму {total} ₽ успешно получена! Спасибо за покупку."
     )
     _notify(telegram_id, text, parse_mode="HTML")
-
-    # Реферальная система: если это ПЕРВЫЙ оплаченный заказ приглашённого
-    # пользователя — начисляем бонус пригласившему и уведомляем обоих.
-    # mark_converted сам защищён от повторного начисления (см. referrals_db.py),
-    # поэтому безопасно вызывать на каждый payment-success без доп. проверок.
-    referrer_id = referrals_db.mark_converted(telegram_id)
-    if referrer_id:
-        _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
-        _sword = f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji>'
-        _notify(
-            referrer_id,
-            f"{_diamond} <b>Твой соратник оплатил первый заказ!</b>\n\n"
-            f"Тебе начислено {referrals_db.REFERRAL_BONUS_RUB} ₽ бонуса.",
-            parse_mode="HTML",
-        )
-        _notify(
-            telegram_id,
-            f"{_sword} Скидка за приглашение применена — спасибо, что присоединился "
-            f"по ссылке соратника!",
-            parse_mode="HTML",
-        )
-        logger.info(
-            "Реферал конвертирован через payment-success: invitee=%s referrer=%s order_id=%s",
-            telegram_id, referrer_id, order_id,
-        )
 
     logger.info("payment-success обработан: telegram_id=%s order_id=%s total=%s", telegram_id, order_id, total)
     return jsonify({"status": "ok"}), 200

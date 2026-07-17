@@ -1,56 +1,51 @@
 """
-referrals_db.py — реферальная система "Пригласить соратника".
+referrals_db.py — реферальная система «Пригласить соратника».
+Переписана с нуля под правила из Excel заказчика («подписки.xlsx»).
 
-ПРАВИЛА (зафиксированы по ТЗ):
-  - У каждого пользователя своя ссылка: t.me/<bot_username>?start=<telegram_id>
-  - Перешёл по ссылке — бот запоминает, кто пригласил (один раз, навсегда:
-    если у человека уже есть пригласивший — повторно не перезаписываем).
-  - Пригласить может максимум ТРЁХ человек — четвёртый переход по ссылке
-    просто не создаёт реферальную связь (человек всё равно может
-    пользоваться ботом как обычно).
-  - Реферальная связь фиксируется ТОЛЬКО для совсем новых пользователей
-    (ещё не проходивших согласие на ОПД) — иначе теряется смысл "привёл
-    нового клиента".
-  - При ПЕРВОМ ОПЛАЧЕННОМ заказе приглашённого:
-      • пригласившему начисляется 500 ₽ бонуса (см. ВАЖНО ниже про то,
-        что это пока только бот-side учёт);
-      • статус связи меняется на 'converted' — второй раз бонус за этого
-        же приглашённого не начисляется, даже если у него будет ещё заказ.
-  - Скидка 10% приглашённому на первый заказ — реализована через промокод
-    (см. main.py, REFERRAL_INVITEE_PROMO), применяется при оформлении,
-    пока связь ещё 'pending'.
+ПРАВИЛА ИЗ EXCEL:
+    Количество приглашённых | Бонус пригласившему | Бонус приглашённому
+             1              |      (не задан)     | Скидка 20% на первую годовую подписку
+             3              |      (не задан)     | Скидка 20% на первую годовую подписку
+             6              |      (не задан)     | Скидка 20% на первую годовую подписку
 
-ВАЖНО — про 500 ₽ бонуса пригласившему:
-Это ПОКА чисто бот-side цифра (таблица credits ниже) — бот знает и
-показывает пользователю, что у него накоплено N рублей, но реально
-СПИСАТЬ эту сумму с цены при оплате бот не может: оплата целиком идёт
-через сайт (checkout_url от Фёдора), и только сайт решает финальную
-цену. Чтобы бонус реально работал как скидка на будущий заказ, нужно
-одно из:
-  а) Фёдор заводит у себя баланс/кошелёк пользователя и наш бот сообщает
-     ему через API "начислить N ₽ пользователю X";
-  б) Фёдор даёт эндпоинт генерации одноразового купона на сумму N ₽,
-     бот запрашивает купон, когда бонус начислен, и подставляет его код
-     в поле promotions при следующем заказе.
-Пока ни то ни другое не согласовано — это отдельный вопрос к Фёдору.
-Функция get_balance() ниже уже готова показать эту сумму пользователю
-("у тебя накоплено 500 ₽") — просто это накопление сейчас не с чем
-состыковать на кассе.
+⚠️ ВНИМАНИЕ — НЕЗАКРЫТЫЙ ВОПРОС К ЗАКАЗЧИКУ:
+Колонка «Бонус для пригласившего» в Excel ПУСТАЯ на всех трёх ступенях
+(1 / 3 / 6). То есть по документу приглашённый получает скидку 20%,
+а пригласивший — формально ничего. Это почти наверняка недозаполнено,
+поэтому здесь заложены СТУПЕНИ (MILESTONES) с пустым вознаграждением:
+как только заказчик скажет, что даётся за 1 / 3 / 6 приглашённых —
+достаточно вписать значения в MILESTONE_REWARDS ниже, вся остальная
+механика (учёт, счётчики, уведомления) уже работает и не меняется.
+
+ЧТО РАБОТАЕТ СЕЙЧАС:
+  - персональная ссылка t.me/musculataclub_bot?start=<telegram_id>;
+  - переход по ссылке фиксирует связь «кто кого пригласил» (навсегда,
+    один пригласивший на человека, повторно не перезаписывается);
+  - самоприглашение отклоняется;
+  - приглашённый получает скидку 20% на ПЕРВУЮ годовую подписку;
+  - скидка сгорает после того, как подписка оплачена (статус converted) —
+    второй раз та же связь не даёт скидку;
+  - счётчик приглашённых у пригласившего растёт по факту КОНВЕРСИИ
+    (оплаченной подписки приглашённого), а не по факту перехода
+    по ссылке — иначе накрутить ступени было бы тривиально;
+  - при достижении ступени 1 / 3 / 6 пригласивший получает уведомление.
+
+Лимита на число приглашений НЕТ — по Excel ступени идут до 6, ограничение
+сверху не заявлено (прошлое требование «максимум 3» отменено новой
+таблицей; если лимит всё же нужен — вернуть проверку в register_referral).
 
 СХЕМА:
     referrals (
-        invitee_id     -- PK, кого пригласили (один пригласивший на человека)
-        referrer_id    -- кто пригласил
-        status         -- 'pending' / 'converted'
+        invitee_id    -- PK, кого пригласили
+        referrer_id   -- кто пригласил
+        status        -- 'pending' (перешёл, ещё не оплатил подписку)
+                      -- 'converted' (оплатил первую подписку, ступень засчитана)
         invited_at
         converted_at
     )
-    credits (
-        id             -- PK автоинкремент
-        referrer_id    -- кому начислено
-        invitee_id     -- за кого начислено
-        amount         -- сумма в рублях
-        created_at
+    milestones_reached (
+        referrer_id + milestone -- PK (составной), чтобы не уведомлять дважды
+        reached_at
     )
 """
 
@@ -63,8 +58,18 @@ from contextlib import contextmanager
 logger = logging.getLogger("referrals_db")
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "referrals.db")
-MAX_INVITES_PER_REFERRER = 3
-REFERRAL_BONUS_RUB = 500
+
+# Скидка приглашённому на первую годовую подписку — из Excel.
+INVITEE_DISCOUNT_PERCENT = 20
+
+# Ступени из Excel. Значение — что получает ПРИГЛАСИВШИЙ на этой ступени.
+# Пусто, потому что в Excel колонка не заполнена (см. предупреждение выше).
+MILESTONE_REWARDS: dict[int, str | None] = {
+    1: None,
+    3: None,
+    6: None,
+}
+MILESTONES = sorted(MILESTONE_REWARDS.keys())
 
 
 def _init_db():
@@ -80,17 +85,14 @@ def _init_db():
             )
             """
         )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ref_referrer ON referrals(referrer_id)")
         conn.execute(
             """
-            CREATE TABLE IF NOT EXISTS credits (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                referrer_id   INTEGER NOT NULL,
-                invitee_id    INTEGER NOT NULL,
-                amount        INTEGER NOT NULL,
-                created_at    TEXT NOT NULL
+            CREATE TABLE IF NOT EXISTS milestones_reached (
+                referrer_id INTEGER NOT NULL,
+                milestone   INTEGER NOT NULL,
+                reached_at  TEXT NOT NULL,
+                PRIMARY KEY (referrer_id, milestone)
             )
             """
         )
@@ -111,95 +113,133 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def count_invites(referrer_id: int) -> int:
-    """Сколько человек уже привязано к этому пригласившему (pending + converted)."""
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) AS c FROM referrals WHERE referrer_id = ?", (referrer_id,)
-        ).fetchone()
-    return row["c"]
-
-
-def can_invite_more(referrer_id: int) -> bool:
-    return count_invites(referrer_id) < MAX_INVITES_PER_REFERRER
-
+# ---------- Связи ----------
 
 def get_referral(invitee_id: int) -> dict | None:
     with _connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM referrals WHERE invitee_id = ?", (invitee_id,)
-        ).fetchone()
+        row = conn.execute("SELECT * FROM referrals WHERE invitee_id = ?", (invitee_id,)).fetchone()
     return dict(row) if row else None
 
 
 def register_referral(referrer_id: int, invitee_id: int) -> tuple[bool, str]:
     """
-    Пытается зафиксировать связь "referrer_id пригласил invitee_id".
+    Фиксирует связь «referrer_id пригласил invitee_id».
+    Возвращает (успех, причина) — причина для логов.
 
-    Возвращает (успех: bool, причина: str). Причина нужна для логов/отладки,
-    пользователю её показывать не обязательно дословно.
-
-    Отказывает, если:
-      - пытаются пригласить самого себя;
-      - у invitee_id УЖЕ есть пригласивший (один пригласивший на человека,
-        повторно не считаем — по ТЗ);
-      - у referrer_id уже MAX_INVITES_PER_REFERRER приглашённых.
+    Отказ, если: приглашает сам себя, либо у приглашённого уже есть
+    пригласивший (один на человека, навсегда).
     """
     if referrer_id == invitee_id:
         return False, "self_referral"
-
     if get_referral(invitee_id) is not None:
         return False, "already_has_referrer"
-
-    if not can_invite_more(referrer_id):
-        return False, "referrer_limit_reached"
 
     with _connect() as conn:
         conn.execute(
             "INSERT INTO referrals (invitee_id, referrer_id, status, invited_at) VALUES (?, ?, 'pending', ?)",
             (invitee_id, referrer_id, _now()),
         )
-    logger.info("Реферальная связь зафиксирована: referrer=%s invitee=%s", referrer_id, invitee_id)
+    logger.info("Реферальная связь: referrer=%s invitee=%s", referrer_id, invitee_id)
     return True, "ok"
 
 
-def mark_converted(invitee_id: int) -> int | None:
-    """
-    Вызывается при первом ОПЛАЧЕННОМ заказе приглашённого (см. webhooks.py,
-    payment-success). Начисляет бонус пригласившему и переводит связь
-    в статус 'converted' — повторно бонус за этого invitee не начислится.
+# ---------- Скидка приглашённому ----------
 
-    Возвращает telegram_id пригласившего, если бонус начислен, иначе None
-    (нет связи, или она уже была converted раньше — защита от повторного
-    начисления, если вебхук придёт дважды).
+def has_pending_invitee_discount(invitee_id: int) -> bool:
     """
-    referral = get_referral(invitee_id)
-    if not referral or referral["status"] != "pending":
+    True, если этот пользователь пришёл по чьей-то ссылке и ещё НЕ оплатил
+    свою первую подписку — значит, ему полагается скидка 20%.
+    """
+    ref = get_referral(invitee_id)
+    return ref is not None and ref["status"] == "pending"
+
+
+# ---------- Конверсия и ступени ----------
+
+def count_converted(referrer_id: int) -> int:
+    """Сколько приглашённых РЕАЛЬНО оплатили подписку (ступени считаются по этому числу)."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM referrals WHERE referrer_id = ? AND status = 'converted'",
+            (referrer_id,),
+        ).fetchone()
+    return row["c"]
+
+
+def count_pending(referrer_id: int) -> int:
+    """Сколько перешли по ссылке, но ещё не оплатили подписку."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS c FROM referrals WHERE referrer_id = ? AND status = 'pending'",
+            (referrer_id,),
+        ).fetchone()
+    return row["c"]
+
+
+def _mark_milestone(referrer_id: int, milestone: int) -> bool:
+    """Отмечает ступень достигнутой. False, если она уже была отмечена раньше."""
+    try:
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO milestones_reached (referrer_id, milestone, reached_at) VALUES (?, ?, ?)",
+                (referrer_id, milestone, _now()),
+            )
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def mark_converted(invitee_id: int) -> dict | None:
+    """
+    Вызывается, когда приглашённый оплатил свою ПЕРВУЮ подписку.
+
+    Переводит связь в 'converted' (скидка 20% больше не действует) и
+    проверяет, не достиг ли пригласивший новой ступени.
+
+    Возвращает None, если связи нет или она уже была converted
+    (защита от повторного вебхука). Иначе:
+        {
+          "referrer_id": int,
+          "converted_count": int,        # сколько всего оплативших привёл
+          "milestone_reached": int|None, # какая ступень взята прямо сейчас
+          "reward": str|None,            # что за неё положено (пока не задано)
+        }
+    """
+    ref = get_referral(invitee_id)
+    if not ref or ref["status"] != "pending":
         return None
 
-    referrer_id = referral["referrer_id"]
-    now = _now()
+    referrer_id = ref["referrer_id"]
     with _connect() as conn:
         conn.execute(
             "UPDATE referrals SET status = 'converted', converted_at = ? WHERE invitee_id = ?",
-            (now, invitee_id),
+            (_now(), invitee_id),
         )
-        conn.execute(
-            "INSERT INTO credits (referrer_id, invitee_id, amount, created_at) VALUES (?, ?, ?, ?)",
-            (referrer_id, invitee_id, REFERRAL_BONUS_RUB, now),
-        )
-    logger.info("Реферал конвертирован: referrer=%s invitee=%s +%s ₽", referrer_id, invitee_id, REFERRAL_BONUS_RUB)
-    return referrer_id
+
+    converted_count = count_converted(referrer_id)
+
+    milestone_reached = None
+    if converted_count in MILESTONE_REWARDS and _mark_milestone(referrer_id, converted_count):
+        milestone_reached = converted_count
+
+    logger.info(
+        "Реферал конвертирован: invitee=%s referrer=%s всего=%s ступень=%s",
+        invitee_id, referrer_id, converted_count, milestone_reached,
+    )
+    return {
+        "referrer_id": referrer_id,
+        "converted_count": converted_count,
+        "milestone_reached": milestone_reached,
+        "reward": MILESTONE_REWARDS.get(milestone_reached) if milestone_reached else None,
+    }
 
 
-def get_balance(referrer_id: int) -> int:
-    """Сумма накопленных бонусов (в рублях) — см. примечание в шапке файла про интеграцию с сайтом."""
-    with _connect() as conn:
-        row = conn.execute(
-            "SELECT COALESCE(SUM(amount), 0) AS total FROM credits WHERE referrer_id = ?",
-            (referrer_id,),
-        ).fetchone()
-    return row["total"]
+def next_milestone(converted_count: int) -> int | None:
+    """Следующая непройденная ступень — для показа прогресса пользователю."""
+    for m in MILESTONES:
+        if converted_count < m:
+            return m
+    return None
 
 
 _init_db()

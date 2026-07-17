@@ -99,22 +99,18 @@ def _error_response() -> dict:
 SITE_SUBSCRIPTION_ENDPOINT = os.environ.get("SITE_SUBSCRIPTION_ENDPOINT", "")
 
 
-def create_subscription_order(telegram_id: int, pack_id: int) -> dict:
+def create_subscription_order(telegram_id: int, tier_id: int, promotions: str | None = None) -> dict:
     """
-    Отправляет запрос на оплату годовой подписки на конкретный тариф
-    (пак). Паки — это и есть тарифы подписки Ордена, отдельного понятия
-    "просто подписка без тарифа" не существует.
+    Запрос на оплату годовой подписки Ордена на конкретный уровень
+    (Оруженосец / Рыцарь / Военачальник — см. subscription_tiers.py).
 
-    ВНИМАНИЕ: SITE_SUBSCRIPTION_ENDPOINT ещё не согласован с Фёдором —
-    пока переменная пустая, функция сразу возвращает error, чтобы
-    handle_pack_subscribe в main.py мог показать пользователю понятное
-    сообщение "подписка временно недоступна", а не упасть или зависнуть.
+    promotions — промокод, если есть. Сейчас используется REF20 (скидка 20%
+    приглашённому на первую годовую подписку, по Excel заказчика).
 
-    Фёдор предложил (обсудит в начале следующей недели) ввести у себя
-    понятие "набор/бандл" и принимать его как один товар — соответственно,
-    в payload ниже уже заложено поле "bundle_id" под эту схему; как
-    только он подтвердит формат, тут может понадобиться только
-    переименовать поле, сама структура вызова не изменится.
+    ⚠️ SITE_SUBSCRIPTION_ENDPOINT ещё не согласован с Фёдором — пока
+    переменная пустая, функция сразу возвращает error, и handle_tier_subscribe
+    показывает пользователю честное «оплата временно недоступна» вместо
+    падения или зависания.
     """
     if not SITE_SUBSCRIPTION_ENDPOINT or not X_BOT_TOKEN:
         logger.error("Оплата подписки недоступна: эндпоинт или токен ещё не настроены Фёдором")
@@ -123,8 +119,11 @@ def create_subscription_order(telegram_id: int, pack_id: int) -> dict:
     payload = {
         "telegram_id": telegram_id,
         "product": "order_subscription",
-        "bundle_id": pack_id,
+        "tier_id": tier_id,
     }
+    if promotions:
+        payload["promotions"] = promotions
+
     headers = {"Content-Type": "application/json", "X-Bot-Token": X_BOT_TOKEN}
 
     try:
@@ -133,11 +132,11 @@ def create_subscription_order(telegram_id: int, pack_id: int) -> dict:
         )
         response.raise_for_status()
         data = response.json()
-        logger.info("Запрос на оплату подписки создан: telegram_id=%s pack_id=%s order_id=%s",
-                     telegram_id, pack_id, data.get("order_id"))
+        logger.info("Запрос на подписку создан: telegram_id=%s tier_id=%s order_id=%s",
+                     telegram_id, tier_id, data.get("order_id"))
         return data
     except requests.exceptions.RequestException as e:
-        logger.error("Ошибка при создании заказа подписки для telegram_id=%s: %s", telegram_id, e)
+        logger.error("Ошибка при создании подписки для telegram_id=%s: %s", telegram_id, e)
         return _error_response()
     except ValueError as e:
         logger.error("Сайт вернул невалидный JSON для подписки telegram_id=%s: %s", telegram_id, e)

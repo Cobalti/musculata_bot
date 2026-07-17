@@ -24,6 +24,7 @@ from cart import get_cart
 import emoji_ids
 import emoji_ui
 import packs
+import subscription_tiers
 
 # ---------- Тексты кнопок нижней панели (ReplyKeyboard) ----------
 
@@ -87,6 +88,12 @@ def categories_keyboard_dict() -> dict:
     rows.append([emoji_ui.build_emoji_button(
         "Все товары", callback_data=f"cat:{ALL_CATEGORIES}:0",
         icon_custom_emoji_id=emoji_ids.SCROLL,
+    )])
+    # Военные Сундуки — готовые наборы. Живут в каталоге как обычные
+    # товары (подписка не нужна), внизу списка категорий.
+    rows.append([emoji_ui.build_emoji_button(
+        "Военные Сундуки", callback_data="packs_list",
+        icon_custom_emoji_id=emoji_ids.SHIELD,
     )])
     return emoji_ui.build_emoji_keyboard(rows)
 
@@ -221,12 +228,19 @@ def cart_keyboard_dict(user_id: int) -> dict:
     cart = get_cart(user_id)
     rows = []
     for pid, qty in cart.items():
-        product = PRODUCTS_BY_ID.get(pid)
-        if not product:
-            continue
+        if packs.is_pack_id(pid):
+            pack = packs.get_pack(pid)
+            if not pack:
+                continue
+            label, icon = f"Убрать сундук «{pack['name']}» ({qty} шт.)", emoji_ids.SHIELD
+        else:
+            product = PRODUCTS_BY_ID.get(pid)
+            if not product:
+                continue
+            label, icon = f"Убрать {product['name']} ({qty} шт.)", emoji_ids.SWORD
         rows.append([emoji_ui.build_emoji_button(
-            f"Убрать {product['name']} ({qty} шт.)", callback_data=f"remove:{pid}",
-            icon_custom_emoji_id=emoji_ids.SWORD, style="danger",
+            label, callback_data=f"remove:{pid}",
+            icon_custom_emoji_id=icon, style="danger",
         )])
     if cart:
         rows.append([emoji_ui.build_emoji_button(
@@ -248,66 +262,120 @@ def consent_keyboard_dict() -> dict:
     ]])
 
 
-# ---------- Орден: статус подписки + вход в тарифы (Военные Сундуки) ----------
+# ---------- Орден: уровни подписки ----------
 
 def order_menu_keyboard_dict(has_subscription: bool) -> dict:
     """
-    Главный экран Ордена. Единственная кнопка входа — 'Военные Сундуки':
-    там пользователь смотрит тарифы и, если ещё не подписан, оформляет
-    подписку прямо на выбранном тарифе (см. pack_detail_keyboard_dict).
-    Отдельной общей кнопки оплаты больше нет — паки И ЕСТЬ подписка,
-    оплата всегда привязана к конкретному тарифу.
+    Главный экран Ордена. Показывает три уровня подписки; если подписка
+    уже активна — уровни всё равно видны (можно посмотреть, что даёт
+    следующий), но помечено, какой активен.
     """
+    # Три "сундука" из набора эмодзи подписаны автором именно как базовый/
+    # средний/премиум набор ОРДЕНА — по порядку совпадают с TIERS
+    # (Оруженосец/Рыцарь/Военачальник), поэтому у каждого уровня своя иконка
+    # вместо одного и того же SHIELD на все три.
+    tier_icons = [emoji_ids.BOX_BASIC, emoji_ids.BOX_MEDIUM, emoji_ids.BOX_PREMIUM]
+
+    rows = []
+    for idx, tier in enumerate(subscription_tiers.TIERS):
+        rows.append([emoji_ui.build_emoji_button(
+            f"{tier['name']} — {tier['price_year']:,} ₽/год".replace(",", " "),
+            callback_data=f"tier:{tier['id']}",
+            icon_custom_emoji_id=tier_icons[idx] if idx < len(tier_icons) else emoji_ids.SHIELD,
+        )])
+    if has_subscription:
+        rows.append([emoji_ui.build_emoji_button(
+            "Моя подписка", callback_data="my_subscription",
+            icon_custom_emoji_id=emoji_ids.DIAMOND, style="success",
+        )])
+    return emoji_ui.build_emoji_keyboard(rows)
+
+
+def tier_detail_keyboard_dict(tier_id: int, has_subscription: bool, is_current: bool) -> dict:
+    """
+    Под карточкой уровня. Оформить можно, только если подписки ещё нет.
+    Если уже подписан на этот же уровень — статус-кнопка. Если подписан
+    на другой — смена тарифа заявлена в Excel, но механика перерасчёта
+    ещё не согласована с сайтом, поэтому пока просто сообщаем об этом.
+    """
+    tier = subscription_tiers.get_tier(tier_id)
+    price = f"{tier['price_year']:,}".replace(",", " ") if tier else "?"
+
+    if is_current:
+        action = emoji_ui.build_emoji_button(
+            "Твой текущий уровень", callback_data="noop",
+            icon_custom_emoji_id=emoji_ids.DIAMOND, style="success",
+        )
+    elif has_subscription:
+        action = emoji_ui.build_emoji_button(
+            "Сменить тариф", callback_data=f"tier_switch:{tier_id}",
+            icon_custom_emoji_id=emoji_ids.SWORD, style="primary",
+        )
+    else:
+        action = emoji_ui.build_emoji_button(
+            f"Вступить в Орден — {price} ₽/год", callback_data=f"tier_pay:{tier_id}",
+            icon_custom_emoji_id=emoji_ids.DIAMOND, style="success",
+        )
+
     return emoji_ui.build_emoji_keyboard([
+        [action],
         [emoji_ui.build_emoji_button(
-            "Военные Сундуки", callback_data="packs_list",
-            icon_custom_emoji_id=emoji_ids.SHIELD,
+            "К уровням", callback_data="order_menu",
+            icon_custom_emoji_id=emoji_ids.SCROLL,
         )],
     ])
 
 
-# ---------- Военные Сундуки — тарифы подписки Ордена ----------
+def my_subscription_keyboard_dict() -> dict:
+    return emoji_ui.build_emoji_keyboard([[
+        emoji_ui.build_emoji_button(
+            "К уровням", callback_data="order_menu",
+            icon_custom_emoji_id=emoji_ids.SCROLL,
+        )
+    ]])
 
-def packs_list_keyboard_dict() -> dict:
-    """Три тарифа на выбор + возврат в Орден. Цена — за год подписки."""
+
+# ---------- Военные Сундуки (паки) — в каталоге ----------
+
+def packs_list_keyboard_dict(tier_id: int | None = None) -> dict:
+    """Три сундука + возврат к категориям. Цена — с учётом скидки подписки."""
+    # Самоцветы по нарастанию ценности — Базовый/Продвинутый/Премиум.
+    # Специально другие иконки, чем у уровней Ордена (BOX_*), чтобы
+    # пользователь визуально не путал паки каталога с уровнями подписки.
+    pack_icons = [emoji_ids.EMERALD, emoji_ids.RUBIN, emoji_ids.DIAMOND]
+
     rows = []
-    for pack in packs.PACKS:
+    for idx, pack in enumerate(packs.PACKS):
+        price = packs.price_for(pack["id"], tier_id)
         rows.append([emoji_ui.build_emoji_button(
-            f"{pack['name']} — {pack['bundle_price']} ₽/год",
+            f"{pack['name']} — {price:,} ₽".replace(",", " "),
             callback_data=f"pack:{pack['id']}",
-            icon_custom_emoji_id=emoji_ids.SHIELD,
+            icon_custom_emoji_id=pack_icons[idx] if idx < len(pack_icons) else emoji_ids.SHIELD,
         )])
     rows.append([emoji_ui.build_emoji_button(
-        "В Орден", callback_data="order_menu",
+        "К категориям", callback_data="catlist",
         icon_custom_emoji_id=emoji_ids.SCROLL,
     )])
     return emoji_ui.build_emoji_keyboard(rows)
 
 
-def pack_detail_keyboard_dict(pack_id: int, has_subscription: bool) -> dict:
-    """
-    Под карточкой тарифа. Состав виден всем без ограничений. Если
-    подписки ещё нет — кнопка сразу запускает оплату ИМЕННО этого тарифа
-    (никакой корзины, оплата на сайте). Если подписка уже активна
-    (на любом тарифе) — вместо оплаты статус-кнопка без действия,
-    повторно оформить нельзя, пока текущая подписка не истечёт.
-    """
-    if has_subscription:
-        action_row = [emoji_ui.build_emoji_button(
-            "Ты уже в Ордене", callback_data="noop",
-            icon_custom_emoji_id=emoji_ids.DIAMOND, style="success",
-        )]
+def pack_detail_keyboard_dict(pack_id: int, user_id: int) -> dict:
+    """Под карточкой сундука: добавить в корзину (доступно всем) и назад."""
+    qty = get_cart(user_id).get(pack_id, 0)
+    if qty > 0:
+        label = f"В корзине: {qty} шт. (нажми, чтобы добавить ещё)"
+        icon, style = emoji_ids.DIAMOND, None
     else:
-        pack = packs.get_pack(pack_id)
-        price = pack["bundle_price"] if pack else "?"
-        action_row = [emoji_ui.build_emoji_button(
-            f"Оформить подписку — {price} ₽/год", callback_data=f"subscribe_pay:{pack_id}",
-            icon_custom_emoji_id=emoji_ids.DIAMOND, style="success",
-        )]
+        label = "Взять сундук в поход"
+        icon, style = emoji_ids.SHIELD, "success"
+
     return emoji_ui.build_emoji_keyboard([
-        action_row,
         [emoji_ui.build_emoji_button(
-            "Отмена", callback_data="packs_list",
+            label, callback_data=f"pack_add:{pack_id}",
+            icon_custom_emoji_id=icon, style=style,
+        )],
+        [emoji_ui.build_emoji_button(
+            "К сундукам", callback_data="packs_list",
             icon_custom_emoji_id=emoji_ids.SCROLL,
         )],
     ])
@@ -319,4 +387,5 @@ def categories_keyboard() -> types.InlineKeyboardMarkup:
     for idx, cat in enumerate(CATEGORIES):
         markup.add(types.InlineKeyboardButton(cat, callback_data=f"cat:{idx}:0"))
     markup.add(types.InlineKeyboardButton("📋 Все товары", callback_data=f"cat:{ALL_CATEGORIES}:0"))
+    markup.add(types.InlineKeyboardButton("🛡 Военные Сундуки", callback_data="packs_list"))
     return markup
