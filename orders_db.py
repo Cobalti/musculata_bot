@@ -66,7 +66,16 @@ def _init_db():
 
 @contextmanager
 def _connect():
-    conn = sqlite3.connect(DB_PATH)
+    # timeout=10 + WAL + busy_timeout — защита от "database is locked" при
+    # конкурентном доступе. Особенно важно, если на сервере на короткое
+    # время оказываются запущены ДВА инстанса бота одновременно (например,
+    # во время рестарта хостингом) — без этого одновременная запись из
+    # двух процессов может уронить чтение/запись с ошибкой, и пользователь
+    # получит тишину вместо ответа (см. errors.py — раньше такая ошибка
+    # вообще не долетала до юзера).
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=10000")
     conn.row_factory = sqlite3.Row
     try:
         yield conn
