@@ -383,6 +383,9 @@ def _pack_detail_text(pack: dict, tier_id) -> str:
             f"от {packs.price_for(pack['id'], subscription_tiers.TIERS[0]['id'])} ₽.</i>",
         ]
 
+    if pack.get("gift"):
+        lines.append(f"\n{_diamond} <b>Бонус:</b> {pack['gift']}")
+
     return "\n".join(lines)
 
 

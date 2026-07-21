@@ -23,7 +23,14 @@ import webhooks
 
 logger = logging.getLogger("run")
 
-WEBHOOK_PORT = int(os.environ.get("WEBHOOK_PORT", "5000"))
+# Многие хостинги (в том числе bothost) назначают порт динамически через
+# свою переменную окружения PORT — если домен привязан к прокси, который
+# форвардит именно на этот порт, а не на наш WEBHOOK_PORT, приложение
+# внутри контейнера будет слушать не тот порт, куда стучится прокси, и
+# снаружи всё будет выглядеть как 404, хотя Flask внутри стартовал нормально.
+# Проверяем сначала платформенный PORT, потом свой WEBHOOK_PORT, и только
+# затем дефолт 5000.
+WEBHOOK_PORT = int(os.environ.get("PORT") or os.environ.get("WEBHOOK_PORT", "5000"))
 
 
 def start_bot_polling():
@@ -47,7 +54,11 @@ def main():
     polling_thread = threading.Thread(target=start_bot_polling, daemon=True)
     polling_thread.start()
 
-    logger.info("Запуск веб-сервера вебхуков на порту %s...", WEBHOOK_PORT)
+    port_source = "PORT" if os.environ.get("PORT") else ("WEBHOOK_PORT" if os.environ.get("WEBHOOK_PORT") else "дефолт")
+    logger.info(
+        "Запуск веб-сервера вебхуков на порту %s (источник: %s)...",
+        WEBHOOK_PORT, port_source,
+    )
     webhooks.app.run(host="0.0.0.0", port=WEBHOOK_PORT)
 
 
