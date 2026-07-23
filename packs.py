@@ -2,11 +2,15 @@
 packs.py — «Военные Сундуки»: готовые наборы товаров со скидкой 15%
 против розницы. Живут в КАТАЛОГЕ как обычные товары.
 
-Данные один-в-один из Excel заказчика:
-БАЗОВЫЙ, ПРОДВИНУТЫЙ, ПРЕМИУМ (лист «Паки»),
-ЗДОРОВЬЕ, КАЧАЛКА, ЭКСКЛЮЗИВ (Paki4.xlsx, серая таблица A1:U16 —
-доп. наборы «здоровье/базовый», «качалка/продвинутый», «эксклюзивные
-товары»). Итого 6 наборов.
+ВАЖНО: это ОБНОВЛЁННЫЕ версии трёх исходных паков, а НЕ дополнительные
+наборы. Заказчик переименовал и обновил состав:
+    Базовый     → Здоровье   (id 10001)
+    Продвинутый → Качалка    (id 10002)
+    Премиум     → Эксклюзив  (id 10003)
+Старые названия и старые составы (Trec/Scitec/Optimum whey-наборы)
+БОЛЬШЕ НЕ ДЕЙСТВУЮТ — их полностью заменяют данные ниже, взятые из
+Paki4.xlsx (серая таблица A1:U16: «1. здоровье/базовый», «2. качалка/
+продвинутый», «3. эксклюзивные товары»). Всего 3 пака, не 6.
 
 СВЯЗЬ С ПОДПИСКОЙ (Орден):
 Пак может купить кто угодно, подписка НЕ требуется. Но подписчикам
@@ -49,44 +53,6 @@ def _pack(pack_id: int, name: str, tagline: str, items: list[tuple[str, str, int
 PACKS = [
     _pack(
         pack_id=PACK_ID_OFFSET + 1,
-        name="Базовый",
-        tagline="Стартовый доспех для новобранца",
-        items=[
-            ("Trec Nutrition WHEY 100 900g (шоколад)", "Trec", 4512),
-            ("Trec Nutrition CREATINE 100% 300g", "Trec", 2200),
-            ("NOW FLAX OIL ORGANIC 1000mg 100 SGELS", "NOW Foods", 2703),
-            ("Nature Foods ZMA+B6 100 caps", "Nature Foods", 2200),
-        ],
-        bundle_price=9873,
-    ),
-    _pack(
-        pack_id=PACK_ID_OFFSET + 2,
-        name="Продвинутый",
-        tagline="Клинок бывалого воина",
-        items=[
-            ("Scitec Nutrition 100% Whey Protein Prof. 1000g", "Scitec", 5721),
-            ("Optimum Nutrition Creatine 2500 mg 100 caps", "ON", 4200),
-            ("Nature Foods PUMP 30 packs", "Nature Foods", 2278),
-            ("Applied Nutrition Critical Mass 2.4kg (клубника)", "Applied Nutrition", 5200),
-        ],
-        bundle_price=14789,
-    ),
-    _pack(
-        pack_id=PACK_ID_OFFSET + 3,
-        name="Премиум",
-        tagline="Легендарный арсенал магистра",
-        items=[
-            ("Optimum Nutrition 100% Whey Gold standard 5lb", "ON", 19600),
-            ("Trec Nutrition CASEIN 100 600g", "Trec", 3966),
-            ("Optimum Nutrition Creatine 2500 mg 200 caps", "ON", 5700),
-            ("Nature Foods Citrulline Malate 200g (порошок)", "Nature Foods", 2200),
-            ("Universal Animal Flex (44 packs)", "Universal", 7293),
-        ],
-        bundle_price=32945,
-    ),
-    # ---- Новые наборы (добавлены из Paki4.xlsx, серая таблица A1:U16) ----
-    _pack(
-        pack_id=PACK_ID_OFFSET + 4,
         name="Здоровье",
         tagline="Забота о теле для долгой службы",
         items=[
@@ -101,7 +67,7 @@ PACKS = [
         gift="Таблетница в подарок (~500 ₽)",
     ),
     _pack(
-        pack_id=PACK_ID_OFFSET + 5,
+        pack_id=PACK_ID_OFFSET + 2,
         name="Качалка",
         tagline="Снаряжение для взятия зала штурмом",
         items=[
@@ -116,7 +82,7 @@ PACKS = [
         gift="Шейкер в подарок",
     ),
     _pack(
-        pack_id=PACK_ID_OFFSET + 6,
+        pack_id=PACK_ID_OFFSET + 3,
         name="Эксклюзив",
         tagline="Редкие трофеи, которых нет в обычной оружейной",
         items=[

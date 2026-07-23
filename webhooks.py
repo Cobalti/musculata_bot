@@ -72,9 +72,10 @@ def _notify(telegram_id: int, text: str, parse_mode: str | None = None):
 def _handle_referral_conversion(invitee_id: int):
     """
     Вызывается после успешной оплаты ПОДПИСКИ приглашённым пользователем.
-    Засчитывает конверсию и уведомляет обоих. Ступени (1/3/6) берутся
-    из referrals_db; что за них даётся — заказчик ещё не определил,
-    поэтому пока уведомляем о самом факте достижения.
+    Засчитывает конверсию и уведомляет обоих. Ступени (1/3/6) и награды —
+    из ТЗ по подпискам (п. 3.4): +1/+3/+6 месяцев подписки, на 3-й и
+    6-й ступени ещё стикерпак/мерч-набор (это уже не автоматизируется —
+    бот только упоминает в уведомлении, физическую отправку делает человек).
     """
     result = referrals_db.mark_converted(invitee_id)
     if not result:
@@ -90,11 +91,29 @@ def _handle_referral_conversion(invitee_id: int):
         f"{_sword} <b>Твой соратник вступил в Орден!</b>\n\n"
         f"Всего по твоим приглашениям вступили: <b>{count}</b>."
     )
+
     if result["milestone_reached"]:
-        reward = result["reward"]
+        reward = result["reward"] or {}
+        extra_days = reward.get("extra_days", 0)
+        merch_gift = reward.get("merch_gift")
+
         text += f"\n\n{_diamond} <b>Ты достиг ступени {result['milestone_reached']}!</b>"
-        if reward:
-            text += f"\n{reward}"
+
+        if extra_days:
+            new_expires = subscriptions_db.extend_subscription(referrer_id, extra_days)
+            if new_expires:
+                months = extra_days // 30
+                text += f"\nПодписка продлена на {months} мес. — теперь действует до {new_expires[:10]}."
+            else:
+                # У пригласившего сейчас нет активной подписки — продлевать
+                # нечего (extend_subscription сам это проверяет и логирует).
+                # Не обманываем человека сообщением о продлении, если оно
+                # не произошло.
+                text += "\nБонус на продление учтён, но у тебя сейчас нет активной подписки."
+
+        if merch_gift:
+            text += f"\n🎁 Тебе полагается: {merch_gift} — свяжемся с тобой отдельно."
+
     _notify(referrer_id, text, parse_mode="HTML")
 
     logger.info("Реферал конвертирован: invitee=%s referrer=%s всего=%s",

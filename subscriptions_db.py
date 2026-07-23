@@ -198,4 +198,41 @@ def get_active_tier_id(telegram_id: int) -> int | None:
     return sub["tier_id"] if sub else None
 
 
+def extend_subscription(telegram_id: int, extra_days: int) -> str | None:
+    """
+    Продлевает подписку на extra_days дней от текущей даты окончания.
+    Используется для реферальных бонусов (ТЗ по подпискам, п. 3.4:
+    +1/+3/+6 месяцев за 1/3/6 приглашённых) — см. referrals_db.mark_converted
+    и webhooks.py, _handle_referral_conversion.
+
+    Если у пользователя нет активной подписки — ничего не делает и
+    возвращает None (бонус на продление можно получить, только уже
+    имея подписку; сам факт достижения ступени всё равно фиксируется
+    в referrals_db независимо от этого).
+
+    Возвращает новую дату окончания (ISO-строка) при успехе, иначе None.
+    """
+    if not has_active_subscription(telegram_id):
+        logger.warning(
+            "Попытка продлить подписку telegram_id=%s на %s дней, но активной подписки нет — пропущено",
+            telegram_id, extra_days,
+        )
+        return None
+
+    sub = get_subscription(telegram_id)
+    current_expires = datetime.fromisoformat(sub["expires_at"])
+    new_expires = current_expires + timedelta(days=extra_days)
+
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE subscriptions SET expires_at = ? WHERE telegram_id = ?",
+            (new_expires.isoformat(), telegram_id),
+        )
+    logger.info(
+        "Подписка продлена: telegram_id=%s +%s дней, новая дата окончания %s",
+        telegram_id, extra_days, new_expires.isoformat(),
+    )
+    return new_expires.isoformat()
+
+
 _init_db()

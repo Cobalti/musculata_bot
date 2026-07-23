@@ -64,15 +64,20 @@ def main_menu() -> types.ReplyKeyboardMarkup:
 # ---------- Категории → страница каталога → карточка товара ----------
 
 _CATEGORY_EMOJI = {
-    "Протеин": emoji_ids.SWORD,
+    "Протеин (сывороточный)": emoji_ids.SWORD,
+    "Протеин(казеиновый)": emoji_ids.SWORD,
     "Гейнеры": emoji_ids.SHIELD,
     "Креатин": emoji_ids.DIAMOND,
-    "Аминокислоты": emoji_ids.DROP,
+    "Цинк": emoji_ids.DROP,
     "L-карнитин": emoji_ids.DROP,
     "Витамины и минералы": emoji_ids.DIAMOND,
     "Жирные кислоты (Омега-3)": emoji_ids.DROP,
-    "Предтренировочные комплексы": emoji_ids.SWORD,
+    "Предтренировочные комплексы": emoji_ids.POTION_RED,
     "Углеводы": emoji_ids.SHIELD,
+    "Аргинин (AAKG)": emoji_ids.POTION_BLUE,
+    "Бета-Аланин": emoji_ids.POTION_ORANGE,
+    "Глутамин": emoji_ids.POTION_GREEN,
+    "Цитруллин": emoji_ids.POTION_PURPLE,
 }
 
 
@@ -338,16 +343,11 @@ def my_subscription_keyboard_dict() -> dict:
 # ---------- Военные Сундуки (паки) — в каталоге ----------
 
 def packs_list_keyboard_dict(tier_id: int | None = None) -> dict:
-    """Шесть сундуков + возврат к категориям. Цена — с учётом скидки подписки."""
-    # Базовый/Продвинутый/Премиум — самоцветы по нарастанию ценности.
-    # Здоровье/Качалка/Эксклюзив — новые наборы (Paki4.xlsx), подобраны
-    # тематически: капля (здоровье/добавки), кинжал (тренировки), редкий
-    # изумруд-акцент (эксклюзив). Специально не те же иконки, что у уровней
-    # Ордена (BOX_*), чтобы паки и подписку не путать визуально.
-    pack_icons = [
-        emoji_ids.EMERALD, emoji_ids.RUBIN, emoji_ids.DIAMOND,
-        emoji_ids.DROP, emoji_ids.DAGGER, emoji_ids.HELMET,
-    ]
+    """Три сундука (Здоровье/Качалка/Эксклюзив) + возврат к категориям."""
+    # Капля (здоровье/добавки), кинжал (тренировки), редкий изумруд-акцент
+    # (эксклюзив). Специально не те же иконки, что у уровней Ордена (BOX_*),
+    # чтобы паки и подписку не путать визуально.
+    pack_icons = [emoji_ids.DROP, emoji_ids.DAGGER, emoji_ids.EMERALD]
 
     rows = []
     for idx, pack in enumerate(packs.PACKS):
