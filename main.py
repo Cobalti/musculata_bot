@@ -1050,15 +1050,31 @@ def handle_my_subscription(call):
     """Экран текущей подписки — что активно, до какой даты, что даёт."""
     user_id = call.from_user.id
     sub = subscriptions_db.get_subscription(user_id)
-    if not sub or not subscriptions_db.has_active_subscription(user_id):
+
+    # ВАЖНО: has_active_subscription() возвращает False и во время
+    # заморозки (доступ приостановлен по задумке) — но экран "Моя
+    # подписка" должен показываться и в этом случае, просто со статусом
+    # "на паузе", а не говорить пользователю, что подписки нет вообще.
+    # Поэтому здесь проверяем именно срок действия, а не has_active_subscription.
+    expires_at = None
+    if sub and sub.get("expires_at"):
+        try:
+            from datetime import datetime, timezone
+            expires_at = datetime.fromisoformat(sub["expires_at"])
+        except Exception:
+            expires_at = None
+
+    if not sub or not expires_at or expires_at <= datetime.now(expires_at.tzinfo):
         bot.answer_callback_query(call.id, "Активной подписки нет")
         return
 
     bot.answer_callback_query(call.id)
     tier = subscription_tiers.get_tier(sub.get("tier_id"))
+    is_frozen = subscriptions_db.is_frozen(user_id)
     _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
     _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
     _scroll = f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji>'
+    _drop = f'<tg-emoji emoji-id="{emoji_ids.DROP}">💧</tg-emoji>'
 
     started = _format_date(sub.get("started_at"))
     expires = _format_date(sub.get("expires_at"))
@@ -1067,6 +1083,15 @@ def handle_my_subscription(call):
         f"{_diamond} <b>Твоя подписка</b>\n",
         f"{_shield} Уровень: <b>{sub.get('tier_name')}</b>",
     ]
+
+    if is_frozen:
+        frozen_until = _format_date(sub.get("frozen_until"))
+        lines.append(
+            f"\n{_drop} <b>Подписка на паузе до {frozen_until}.</b>\n"
+            f"Доступ приостановлен, но дата окончания сдвинута — оплаченное "
+            f"время не потеряно."
+        )
+
     if started:
         lines.append(f"{_scroll} Вступил: {started}")
     if expires:
@@ -1084,7 +1109,65 @@ def handle_my_subscription(call):
     edit_or_resend(
         call.message.chat.id, user_id, call.message.message_id,
         "\n".join(lines),
-        reply_markup=keyboards.my_subscription_keyboard_dict(),
+        reply_markup=keyboards.my_subscription_keyboard_dict(is_frozen),
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "freeze_prompt")
+@safe_handler(bot)
+def handle_freeze_prompt(call):
+    """Показывает варианты срока заморозки (7/14/30 дней)."""
+    user_id = call.from_user.id
+    if not subscriptions_db.has_active_subscription(user_id):
+        bot.answer_callback_query(call.id, "Активной подписки нет")
+        return
+    if subscriptions_db.is_frozen(user_id):
+        bot.answer_callback_query(call.id, "Подписка уже на паузе")
+        return
+
+    bot.answer_callback_query(call.id)
+    _drop = f'<tg-emoji emoji-id="{emoji_ids.DROP}">💧</tg-emoji>'
+    edit_or_resend(
+        call.message.chat.id, user_id, call.message.message_id,
+        f"{_drop} <b>На сколько дней заморозить подписку?</b>\n\n"
+        "Доступ будет приостановлен на выбранный срок, а дата окончания "
+        "подписки сдвинется на столько же дней вперёд — оплаченное время "
+        "не потеряется. Максимум 30 дней.",
+        reply_markup=keyboards.freeze_options_keyboard_dict(),
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("freeze_do:"))
+@safe_handler(bot)
+def handle_freeze_do(call):
+    """Реально замораживает подписку на выбранный срок."""
+    days = int(call.data.split(":")[1])
+    user_id = call.from_user.id
+
+    result = subscriptions_db.freeze_subscription(user_id, days)
+
+    if not result.get("ok"):
+        reason = result.get("reason")
+        messages = {
+            "invalid_days": "Некорректный срок",
+            "no_subscription": "Активной подписки нет",
+            "already_frozen": "Подписка уже на паузе",
+        }
+        bot.answer_callback_query(call.id, messages.get(reason, "Не получилось"))
+        return
+
+    bot.answer_callback_query(call.id, "Подписка заморожена ❄")
+    analytics.log_event(user_id, call.from_user.username, "subscription_frozen", f"{days} дней")
+
+    _drop = f'<tg-emoji emoji-id="{emoji_ids.DROP}">💧</tg-emoji>'
+    frozen_until = _format_date(result["frozen_until"])
+    new_expires = _format_date(result["new_expires_at"])
+    edit_or_resend(
+        call.message.chat.id, user_id, call.message.message_id,
+        f"{_drop} <b>Подписка заморожена на {days} дней.</b>\n\n"
+        f"Доступ приостановлен до {frozen_until}, дата окончания подписки "
+        f"сдвинута на {new_expires}.",
+        reply_markup=keyboards.my_subscription_keyboard_dict(is_frozen=True),
     )
 
 

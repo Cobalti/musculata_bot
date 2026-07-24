@@ -331,13 +331,35 @@ def tier_detail_keyboard_dict(tier_id: int, has_subscription: bool, is_current: 
     ])
 
 
-def my_subscription_keyboard_dict() -> dict:
-    return emoji_ui.build_emoji_keyboard([[
-        emoji_ui.build_emoji_button(
-            "К уровням", callback_data="order_menu",
-            icon_custom_emoji_id=emoji_ids.SCROLL,
-        )
-    ]])
+def my_subscription_keyboard_dict(is_frozen: bool = False) -> dict:
+    rows = []
+    if not is_frozen:
+        rows.append([emoji_ui.build_emoji_button(
+            "Заморозить подписку", callback_data="freeze_prompt",
+            icon_custom_emoji_id=emoji_ids.DROP,
+        )])
+    rows.append([emoji_ui.build_emoji_button(
+        "К уровням", callback_data="order_menu",
+        icon_custom_emoji_id=emoji_ids.SCROLL,
+    )])
+    return emoji_ui.build_emoji_keyboard(rows)
+
+
+def freeze_options_keyboard_dict() -> dict:
+    """Выбор срока заморозки — быстрые варианты вместо ввода произвольного числа."""
+    options = [7, 14, 30]
+    rows = [
+        [emoji_ui.build_emoji_button(
+            f"{days} дней", callback_data=f"freeze_do:{days}",
+            icon_custom_emoji_id=emoji_ids.DROP,
+        )]
+        for days in options
+    ]
+    rows.append([emoji_ui.build_emoji_button(
+        "Отмена", callback_data="my_subscription",
+        icon_custom_emoji_id=emoji_ids.SCROLL,
+    )])
+    return emoji_ui.build_emoji_keyboard(rows)
 
 
 # ---------- Военные Сундуки (паки) — в каталоге ----------

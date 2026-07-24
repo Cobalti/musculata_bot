@@ -20,6 +20,9 @@ subscriptions_db.py — статус подписки "Орден" по кажд
         site_order_id  -- order_id, которым сайт подтвердил оплату
         started_at     -- когда активирована
         expires_at     -- когда истекает (started_at + 365 дней)
+        frozen_until   -- если подписка сейчас на паузе (ТЗ п. 3.5,
+                          "заморозка до 30 дней") — до какой даты доступ
+                          приостановлен. NULL, если заморозки нет/закончилась.
     )
 
     pending_subscriptions (
@@ -43,6 +46,7 @@ logger = logging.getLogger("subscriptions_db")
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "subscriptions.db")
 SUBSCRIPTION_DAYS = 365
+MAX_FREEZE_DAYS = 30  # ТЗ по подпискам, п. 3.5: "заморозка до 30 дней"
 
 
 def _init_db():
@@ -56,10 +60,18 @@ def _init_db():
                 tier_name     TEXT,
                 site_order_id INTEGER,
                 started_at    TEXT NOT NULL,
-                expires_at    TEXT NOT NULL
+                expires_at    TEXT NOT NULL,
+                frozen_until  TEXT
             )
             """
         )
+        # Миграция для БД, созданных ДО появления заморозки — CREATE TABLE
+        # IF NOT EXISTS не добавит новую колонку в уже существующую таблицу,
+        # поэтому досоздаём её отдельно, если её ещё нет.
+        try:
+            conn.execute("ALTER TABLE subscriptions ADD COLUMN frozen_until TEXT")
+        except sqlite3.OperationalError:
+            pass  # колонка уже есть — база создана после этого изменения
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS pending_subscriptions (
@@ -96,16 +108,29 @@ def _now() -> datetime:
 
 
 def has_active_subscription(telegram_id: int) -> bool:
-    """Главная проверка — используется при показе состава пака и статуса Ордена."""
+    """
+    Главная проверка — используется при показе состава пака и статуса Ордена.
+
+    Во время заморозки (frozen_until в будущем) возвращает False — доступ
+    приостановлен, хотя сама подписка (и дата её окончания) никуда не
+    делась. Это соответствует ТЗ: "контент сохраняется, доступ
+    приостанавливается".
+    """
     with _connect() as conn:
         row = conn.execute(
-            "SELECT expires_at FROM subscriptions WHERE telegram_id = ? AND status = 'active'",
+            "SELECT expires_at, frozen_until FROM subscriptions WHERE telegram_id = ? AND status = 'active'",
             (telegram_id,),
         ).fetchone()
     if not row:
         return False
     expires_at = datetime.fromisoformat(row["expires_at"])
-    return expires_at > _now()
+    if expires_at <= _now():
+        return False
+    if row["frozen_until"]:
+        frozen_until = datetime.fromisoformat(row["frozen_until"])
+        if frozen_until > _now():
+            return False
+    return True
 
 
 def get_subscription(telegram_id: int) -> dict | None:
@@ -233,6 +258,70 @@ def extend_subscription(telegram_id: int, extra_days: int) -> str | None:
         telegram_id, extra_days, new_expires.isoformat(),
     )
     return new_expires.isoformat()
+
+
+def is_frozen(telegram_id: int) -> bool:
+    """True, если подписка прямо сейчас стоит на паузе (заморожена)."""
+    sub = get_subscription(telegram_id)
+    if not sub or not sub.get("frozen_until"):
+        return False
+    return datetime.fromisoformat(sub["frozen_until"]) > _now()
+
+
+def get_freeze_status(telegram_id: int) -> dict | None:
+    """Если подписка сейчас заморожена — {"frozen_until": iso}, иначе None."""
+    if not is_frozen(telegram_id):
+        return None
+    sub = get_subscription(telegram_id)
+    return {"frozen_until": sub["frozen_until"]}
+
+
+def freeze_subscription(telegram_id: int, days: int) -> dict:
+    """
+    Замораживает подписку на `days` дней (максимум MAX_FREEZE_DAYS — из
+    ТЗ по подпискам, п. 3.5: "заморозка до 30 дней при травме, отпуске —
+    контент сохраняется, доступ приостанавливается").
+
+    На время заморозки has_active_subscription() возвращает False (доступ
+    правда приостановлен), но дата окончания подписки СДВИГАЕТСЯ на то же
+    число дней вперёд — оплаченное время не теряется, просто откладывается.
+    Разморозка происходит автоматически, как только проходит frozen_until —
+    отдельного действия/крона не требуется, has_active_subscription сам
+    сравнивает с текущим временем при каждой проверке.
+
+    Возвращает:
+        {"ok": True, "frozen_until": iso, "new_expires_at": iso}
+        {"ok": False, "reason": "invalid_days" | "no_subscription" | "already_frozen"}
+    """
+    if not (1 <= days <= MAX_FREEZE_DAYS):
+        return {"ok": False, "reason": "invalid_days"}
+
+    # Проверяем заморозку РАНЬШЕ активности подписки: во время заморозки
+    # has_active_subscription() и так возвращает False (доступ приостановлен
+    # по задумке) — если проверить в обратном порядке, "уже заморожена"
+    # никогда не отличить от "подписки вообще нет".
+    if is_frozen(telegram_id):
+        return {"ok": False, "reason": "already_frozen"}
+
+    if not has_active_subscription(telegram_id):
+        return {"ok": False, "reason": "no_subscription"}
+
+    sub = get_subscription(telegram_id)
+    current_expires = datetime.fromisoformat(sub["expires_at"])
+    now = _now()
+    frozen_until = now + timedelta(days=days)
+    new_expires = current_expires + timedelta(days=days)
+
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE subscriptions SET frozen_until = ?, expires_at = ? WHERE telegram_id = ?",
+            (frozen_until.isoformat(), new_expires.isoformat(), telegram_id),
+        )
+    logger.info(
+        "Подписка заморожена: telegram_id=%s на %s дней, до %s, новая дата окончания %s",
+        telegram_id, days, frozen_until.isoformat(), new_expires.isoformat(),
+    )
+    return {"ok": True, "frozen_until": frozen_until.isoformat(), "new_expires_at": new_expires.isoformat()}
 
 
 _init_db()
