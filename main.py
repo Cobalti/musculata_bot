@@ -229,6 +229,7 @@ def handle_consent_accept(call):
     user_id = call.from_user.id
     consent_db.give_consent(user_id)
     analytics.log_event(user_id, call.from_user.username, "consent_accepted")
+    bot.answer_callback_query(call.id, "Принято ⚔")
 
     # Убираем кнопку из уже показанного уведомления и помечаем его принятым —
     # само уведомление остаётся в чате навсегда, как юридический текст.
@@ -238,7 +239,6 @@ def handle_consent_accept(call):
         CONSENT_TEXT + f"\n\n{_news} <b>Согласие получено. Спасибо!</b>",
         reply_markup={"inline_keyboard": []},
     )
-    bot.answer_callback_query(call.id, "Принято ⚔")
 
     if not state.get_menu(user_id):
         menu_msg = bot.send_message(
@@ -271,13 +271,13 @@ def handle_catalog_button(message):
 @bot.callback_query_handler(func=lambda c: c.data == "catlist")
 @safe_handler(bot)
 def handle_catlist(call):
+    bot.answer_callback_query(call.id)
     edit_content(
         call.message.chat.id,
         call.message.message_id,
         f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji> Выбери категорию снаряжения:',
         reply_markup=keyboards.categories_keyboard_dict(),
     )
-    bot.answer_callback_query(call.id)
 
 
 # ---------- Военные Сундуки (паки) — в каталоге ----------
@@ -321,6 +321,7 @@ def _pack_intro_text(tier_id) -> str:
 @safe_handler(bot)
 def handle_packs_list(call):
     """Список сундуков. Точка входа — кнопка внизу категорий каталога."""
+    bot.answer_callback_query(call.id)
     user_id = call.from_user.id
     tier_id = subscriptions_db.get_active_tier_id(user_id)
     analytics.log_event(user_id, call.from_user.username, "view_packs")
@@ -339,7 +340,6 @@ def handle_packs_list(call):
         sent = emoji_ui.send_message_with_emoji(call.message.chat.id, text, reply_markup=kb)
         if sent.get("ok"):
             state.set_content(user_id, sent["result"]["message_id"])
-    bot.answer_callback_query(call.id)
 
 
 def _pack_detail_text(pack: dict, tier_id) -> str:
@@ -398,6 +398,7 @@ def handle_pack_detail(call):
         bot.answer_callback_query(call.id, "Такого сундука нет")
         return
 
+    bot.answer_callback_query(call.id)
     user_id = call.from_user.id
     tier_id = subscriptions_db.get_active_tier_id(user_id)
     analytics.log_event(user_id, call.from_user.username, "view_pack", pack["name"])
@@ -407,7 +408,6 @@ def handle_pack_detail(call):
         _pack_detail_text(pack, tier_id),
         reply_markup=keyboards.pack_detail_keyboard_dict(pack_id, user_id),
     )
-    bot.answer_callback_query(call.id)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("pack_add:"))
@@ -423,6 +423,7 @@ def handle_pack_add(call):
     user_id = call.from_user.id
     cart.add_item(user_id, pack_id, qty=1)
     analytics.log_event(user_id, call.from_user.username, "pack_added", pack["name"])
+    bot.answer_callback_query(call.id, f"Сундук «{pack['name']}» в корзине ⚔")
 
     # обновляем клавиатуру, чтобы показать счётчик в корзине
     import requests as _rq
@@ -435,12 +436,12 @@ def handle_pack_add(call):
         },
         timeout=10,
     )
-    bot.answer_callback_query(call.id, f"Сундук «{pack['name']}» в корзине ⚔")
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("cat:"))
 @safe_handler(bot)
 def handle_category_page(call):
+    bot.answer_callback_query(call.id)
     _, cat_idx, page = call.data.split(":")
     cat_idx = int(cat_idx)
     page = int(page)
@@ -471,7 +472,6 @@ def handle_category_page(call):
         sent = emoji_ui.send_message_with_emoji(call.message.chat.id, header, reply_markup=kb)
         if sent.get("ok"):
             state.set_content(call.from_user.id, sent["result"]["message_id"])
-    bot.answer_callback_query(call.id)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("view:"))
@@ -483,6 +483,7 @@ def handle_view_product(call):
         bot.answer_callback_query(call.id, "Товар не найден")
         return
 
+    bot.answer_callback_query(call.id)
     analytics.log_event(
         call.from_user.id,
         call.from_user.username,
@@ -513,7 +514,6 @@ def handle_view_product(call):
         )
     if result.get("ok"):
         state.set_content(call.from_user.id, result["result"]["message_id"])
-    bot.answer_callback_query(call.id)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("add:"))
@@ -526,6 +526,8 @@ def handle_add_to_cart(call):
     product = PRODUCTS_BY_ID.get(int(pid))
     if product:
         analytics.log_event(user_id, call.from_user.username, "add_to_cart", product["name"])
+
+    bot.answer_callback_query(call.id, "Добавлено ⚔")
 
     # Обновляем только клавиатуру под карточкой товара — через прямой
     # API, потому что клавиатура теперь эмодзи-словарь (не telebot-объект).
@@ -540,7 +542,6 @@ def handle_add_to_cart(call):
         },
         timeout=10,
     )
-    bot.answer_callback_query(call.id, "Добавлено ⚔")
 
 
 # ---------- Корзина ----------
@@ -593,6 +594,7 @@ def handle_checkout(call):
         bot.answer_callback_query(call.id, "Корзина пуста")
         return
 
+    bot.answer_callback_query(call.id)
     items_list = list(user_cart.keys())
 
     # Реферальная скидка 20% по Excel даётся на ПОДПИСКУ, а не на обычный
@@ -615,7 +617,9 @@ def handle_checkout(call):
             "(Настройки → Поддержка).",
             parse_mode="HTML",
         )
-        bot.answer_callback_query(call.id, "Ошибка сервера")
+        # Колбэк уже подтверждён выше (до create_order) — здесь просто
+        # завершаем обработку, повторно отвечать на тот же callback_query
+        # нельзя (Telegram отклонит второй ответ).
         return
 
     order_id = response.get("order_id")
@@ -663,7 +667,6 @@ def handle_checkout(call):
         markup.add(types.InlineKeyboardButton("Перейти к оплате", url=checkout_url))
         show_content(call.message.chat.id, user_id, text, reply_markup=markup, parse_mode="HTML")
 
-    bot.answer_callback_query(call.id)
 
     # Корзину чистим сразу после успешного создания заказа на сайте —
     # дальнейший статус (оплачен/нет) отслеживается через вебхук
@@ -859,8 +862,8 @@ def handle_order_menu_button(message):
 @bot.callback_query_handler(func=lambda c: c.data == "order_menu")
 @safe_handler(bot)
 def handle_order_menu_callback(call):
-    _show_order_menu(call.message.chat.id, call.from_user.id, call.message.message_id)
     bot.answer_callback_query(call.id)
+    _show_order_menu(call.message.chat.id, call.from_user.id, call.message.message_id)
 
 
 def _tier_detail_text(tier: dict, is_current: bool, invitee_discount: bool) -> str:
@@ -918,6 +921,7 @@ def handle_tier_detail(call):
         bot.answer_callback_query(call.id, "Такого уровня нет")
         return
 
+    bot.answer_callback_query(call.id)
     user_id = call.from_user.id
     has_sub = subscriptions_db.has_active_subscription(user_id)
     current_tier_id = subscriptions_db.get_active_tier_id(user_id)
@@ -930,7 +934,6 @@ def handle_tier_detail(call):
         _tier_detail_text(tier, is_current, invitee_discount),
         reply_markup=keyboards.tier_detail_keyboard_dict(tier_id, has_sub, is_current),
     )
-    bot.answer_callback_query(call.id)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("tier_pay:"))
@@ -951,6 +954,8 @@ def handle_tier_subscribe(call):
         bot.answer_callback_query(call.id, "Ты уже в Ордене")
         return
 
+    bot.answer_callback_query(call.id)
+
     # Запоминаем выбор ДО ухода на оплату — на случай, если сайт не вернёт
     # tier_id обратно в вебхуке (см. subscriptions_db.record_pending_subscription).
     subscriptions_db.record_pending_subscription(user_id, tier_id)
@@ -969,7 +974,8 @@ def handle_tier_subscribe(call):
             "или напиши в поддержку.",
             parse_mode="HTML",
         )
-        bot.answer_callback_query(call.id, "Пока недоступно")
+        # Колбэк уже подтверждён выше (до create_subscription_order) —
+        # повторно отвечать на тот же callback_query нельзя.
         return
 
     analytics.log_event(user_id, call.from_user.username, "subscription_checkout", tier["name"])
@@ -995,7 +1001,6 @@ def handle_tier_subscribe(call):
     result = emoji_ui.send_message_with_emoji(call.message.chat.id, text, reply_markup=kb)
     if result.get("ok"):
         state.set_content(user_id, result["result"]["message_id"])
-    bot.answer_callback_query(call.id)
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("tier_switch:"))
@@ -1024,6 +1029,7 @@ def handle_my_subscription(call):
         bot.answer_callback_query(call.id, "Активной подписки нет")
         return
 
+    bot.answer_callback_query(call.id)
     tier = subscription_tiers.get_tier(sub.get("tier_id"))
     _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
     _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
@@ -1055,7 +1061,6 @@ def handle_my_subscription(call):
         "\n".join(lines),
         reply_markup=keyboards.my_subscription_keyboard_dict(),
     )
-    bot.answer_callback_query(call.id)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "noop")
@@ -1088,17 +1093,18 @@ def handle_settings_consent(call):
     споров ("покажи, на что я соглашался") это должно быть доступно
     в любой момент, а не только в момент самого первого /start.
     """
+    bot.answer_callback_query(call.id)
     emoji_ui.edit_message_with_emoji(
         call.message.chat.id, call.message.message_id, CONSENT_TEXT,
         reply_markup=keyboards.settings_consent_back_keyboard_dict(),
     )
-    bot.answer_callback_query(call.id)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "settings:revoke_confirm")
 @safe_handler(bot)
 def handle_settings_revoke_confirm(call):
     """Промежуточный шаг — не отзываем по одному тапу, сначала подтверждение."""
+    bot.answer_callback_query(call.id)
     _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
     emoji_ui.edit_message_with_emoji(
         call.message.chat.id, call.message.message_id,
@@ -1107,7 +1113,6 @@ def handle_settings_revoke_confirm(call):
         "не примешь условия заново через /start.",
         reply_markup=keyboards.settings_revoke_confirm_keyboard_dict(),
     )
-    bot.answer_callback_query(call.id)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "settings:revoke_do")
@@ -1125,6 +1130,7 @@ def handle_settings_revoke_do(call):
     # а не сослался на старое (там кнопка уже убрана после первого принятия).
     state.clear_consent_message(user_id)
     analytics.log_event(user_id, call.from_user.username, "consent_revoked")
+    bot.answer_callback_query(call.id, "Согласие отозвано")
 
     _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
     emoji_ui.edit_message_with_emoji(
@@ -1134,23 +1140,23 @@ def handle_settings_revoke_do(call):
         "пользоваться сервисом — напиши /start и прими условия заново.",
         reply_markup={"inline_keyboard": []},
     )
-    bot.answer_callback_query(call.id, "Согласие отозвано")
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "settings:back")
 @safe_handler(bot)
 def handle_settings_back(call):
+    bot.answer_callback_query(call.id)
     emoji_ui.edit_message_with_emoji(
         call.message.chat.id, call.message.message_id,
         f'<tg-emoji emoji-id="{emoji_ids.NEWS}">🗞</tg-emoji> <b>Настройки:</b>',
         reply_markup=keyboards.settings_keyboard_dict(),
     )
-    bot.answer_callback_query(call.id)
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "settings:support")
 @safe_handler(bot)
 def handle_settings_support(call):
+    bot.answer_callback_query(call.id)
     state.set_awaiting_support(call.from_user.id)
     _pencil = f'<tg-emoji emoji-id="{emoji_ids.PENCIL}">📝</tg-emoji>'
     emoji_ui.edit_message_with_emoji(
@@ -1159,7 +1165,6 @@ def handle_settings_support(call):
         f"напрямую, вместе с твоим Telegram-ником.\n\n"
         f"Чтобы отменить отправку — введи команду /cancel_tech.",
     )
-    bot.answer_callback_query(call.id)
 
 
 @bot.message_handler(commands=["cancel_tech"])
@@ -1197,12 +1202,12 @@ def handle_settings_exit(call):
     (основное меню) не затрагивается, потому что она живёт в отдельном
     сообщении.
     """
+    bot.answer_callback_query(call.id)
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
     except Exception:
         pass
     state.clear_content(call.from_user.id)
-    bot.answer_callback_query(call.id)
 
 
 # ---------- Поддержка: полноценная двусторонняя связь с администратором ----------
