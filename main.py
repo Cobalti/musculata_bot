@@ -117,6 +117,31 @@ def edit_content(chat_id, message_id, text, reply_markup=None, parse_mode="HTML"
         return None
 
 
+def edit_or_resend(chat_id, user_id, message_id, text, reply_markup=None):
+    """
+    Пытается отредактировать сообщение (быстро, без "мигания" интерфейса).
+    Если не получилось — например, Telegram вернул "message to edit not
+    found" (сообщение удалено, слишком старое, или пользователь тапнул
+    по устаревшей клавиатуре) — удаляет то, что осталось, и отправляет
+    новое сообщение взамен, обновляя state.content на его message_id.
+
+    Без этого запасного пути пользователь просто не видел бы обновления
+    экрана вообще: колбэк отвечен, а редактирование молча проваливается.
+    """
+    result = emoji_ui.edit_message_with_emoji(chat_id, message_id, text, reply_markup=reply_markup)
+    if result.get("ok"):
+        return result
+
+    try:
+        bot.delete_message(chat_id, message_id)
+    except Exception:
+        pass
+    sent = emoji_ui.send_message_with_emoji(chat_id, text, reply_markup=reply_markup)
+    if sent.get("ok"):
+        state.set_content(user_id, sent["result"]["message_id"])
+    return sent
+
+
 def _handle_referral_start_param(message):
     """
     Разбирает /start с параметром из ссылки t.me/<bot>?start=<referrer_id>
@@ -403,8 +428,8 @@ def handle_pack_detail(call):
     tier_id = subscriptions_db.get_active_tier_id(user_id)
     analytics.log_event(user_id, call.from_user.username, "view_pack", pack["name"])
 
-    emoji_ui.edit_message_with_emoji(
-        call.message.chat.id, call.message.message_id,
+    edit_or_resend(
+        call.message.chat.id, user_id, call.message.message_id,
         _pack_detail_text(pack, tier_id),
         reply_markup=keyboards.pack_detail_keyboard_dict(pack_id, user_id),
     )
@@ -566,8 +591,8 @@ def handle_remove_item(call):
     pid = int(call.data.split(":")[1])
     cart.remove_item(call.from_user.id, pid)
     bot.answer_callback_query(call.id, "Убрано из корзины")
-    emoji_ui.edit_message_with_emoji(
-        call.message.chat.id, call.message.message_id,
+    edit_or_resend(
+        call.message.chat.id, call.from_user.id, call.message.message_id,
         cart.cart_text(call.from_user.id),
         reply_markup=keyboards.cart_keyboard_dict(call.from_user.id),
     )
@@ -929,8 +954,8 @@ def handle_tier_detail(call):
     invitee_discount = referrals_db.has_pending_invitee_discount(user_id)
 
     analytics.log_event(user_id, call.from_user.username, "view_tier", tier["name"])
-    emoji_ui.edit_message_with_emoji(
-        call.message.chat.id, call.message.message_id,
+    edit_or_resend(
+        call.message.chat.id, user_id, call.message.message_id,
         _tier_detail_text(tier, is_current, invitee_discount),
         reply_markup=keyboards.tier_detail_keyboard_dict(tier_id, has_sub, is_current),
     )
@@ -1056,8 +1081,8 @@ def handle_my_subscription(call):
         if tier["trainer"]:
             lines.append(f"{_scroll} {tier['trainer']}")
 
-    emoji_ui.edit_message_with_emoji(
-        call.message.chat.id, call.message.message_id,
+    edit_or_resend(
+        call.message.chat.id, user_id, call.message.message_id,
         "\n".join(lines),
         reply_markup=keyboards.my_subscription_keyboard_dict(),
     )
@@ -1094,8 +1119,8 @@ def handle_settings_consent(call):
     в любой момент, а не только в момент самого первого /start.
     """
     bot.answer_callback_query(call.id)
-    emoji_ui.edit_message_with_emoji(
-        call.message.chat.id, call.message.message_id, CONSENT_TEXT,
+    edit_or_resend(
+        call.message.chat.id, call.from_user.id, call.message.message_id, CONSENT_TEXT,
         reply_markup=keyboards.settings_consent_back_keyboard_dict(),
     )
 
@@ -1106,8 +1131,8 @@ def handle_settings_revoke_confirm(call):
     """Промежуточный шаг — не отзываем по одному тапу, сначала подтверждение."""
     bot.answer_callback_query(call.id)
     _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
-    emoji_ui.edit_message_with_emoji(
-        call.message.chat.id, call.message.message_id,
+    edit_or_resend(
+        call.message.chat.id, call.from_user.id, call.message.message_id,
         f"{_shield} <b>Точно отозвать согласие?</b>\n\n"
         "После этого бот перестанет отвечать на любые действия, пока ты "
         "не примешь условия заново через /start.",
@@ -1133,8 +1158,8 @@ def handle_settings_revoke_do(call):
     bot.answer_callback_query(call.id, "Согласие отозвано")
 
     _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
-    emoji_ui.edit_message_with_emoji(
-        call.message.chat.id, call.message.message_id,
+    edit_or_resend(
+        call.message.chat.id, user_id, call.message.message_id,
         f"{_shield} <b>Согласие отозвано.</b>\n\n"
         "Бот больше не будет отвечать на действия. Чтобы продолжить "
         "пользоваться сервисом — напиши /start и прими условия заново.",
@@ -1146,8 +1171,8 @@ def handle_settings_revoke_do(call):
 @safe_handler(bot)
 def handle_settings_back(call):
     bot.answer_callback_query(call.id)
-    emoji_ui.edit_message_with_emoji(
-        call.message.chat.id, call.message.message_id,
+    edit_or_resend(
+        call.message.chat.id, call.from_user.id, call.message.message_id,
         f'<tg-emoji emoji-id="{emoji_ids.NEWS}">🗞</tg-emoji> <b>Настройки:</b>',
         reply_markup=keyboards.settings_keyboard_dict(),
     )
@@ -1159,8 +1184,8 @@ def handle_settings_support(call):
     bot.answer_callback_query(call.id)
     state.set_awaiting_support(call.from_user.id)
     _pencil = f'<tg-emoji emoji-id="{emoji_ids.PENCIL}">📝</tg-emoji>'
-    emoji_ui.edit_message_with_emoji(
-        call.message.chat.id, call.message.message_id,
+    edit_or_resend(
+        call.message.chat.id, call.from_user.id, call.message.message_id,
         f"{_pencil} Опиши свой вопрос ОДНИМ сообщением — я передам его администратору "
         f"напрямую, вместе с твоим Telegram-ником.\n\n"
         f"Чтобы отменить отправку — введи команду /cancel_tech.",
