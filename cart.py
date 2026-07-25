@@ -93,15 +93,16 @@ def cart_text(user_id: int) -> str:
             f"{icon} {item['name']} — {qty} шт. × {item['price']} ₽ = <b>{item['price'] * qty} ₽</b>"
         )
 
-    # Если подписка даёт скидку на паки — честно показываем это в корзине,
+    # Если присяга даёт скидку на паки — честно показываем это в корзине,
     # иначе пользователь не поймёт, почему цена сундука ниже, чем в каталоге.
     has_pack = any(packs.is_pack_id(i) for i in cart)
     discount = subscription_tiers.pack_discount_for(tier_id)
     if has_pack and discount:
         tier = subscription_tiers.get_tier(tier_id)
+        total_pct = packs.total_discount_percent(tier_id)
         lines.append(
-            f"\n{_diamond} <i>Скидка {int(discount * 100)}% на сундуки — "
-            f"уровень «{tier['name']}»</i>"
+            f"\n{_diamond} <i>Скидка {total_pct}% на сундуки (база 15% + "
+            f"присяга «{tier['name']}»)</i>"
         )
 
     lines.append(f"\n{_diamond} <b>Итого: {cart_total(user_id)} ₽</b>")

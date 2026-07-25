@@ -12,9 +12,9 @@ packs.py — «Военные Сундуки»: готовые наборы то
 Paki4.xlsx (серая таблица A1:U16: «1. здоровье/базовый», «2. качалка/
 продвинутый», «3. эксклюзивные товары»). Всего 3 пака, не 6.
 
-СВЯЗЬ С ПОДПИСКОЙ (Орден):
-Пак может купить кто угодно, подписка НЕ требуется. Но подписчикам
-Ордена полагается дополнительная скидка на паки поверх базовой цены:
+СВЯЗЬ С ПРИСЯГОЙ (Орден):
+Пак может купить кто угодно, присяга НЕ требуется. Но присягнувшим
+Ордену полагается дополнительная скидка на паки поверх базовой цены:
 5% (Оруженосец) / 10% (Рыцарь) / 15% (Военачальник) —
 см. subscription_tiers.pack_discount_for().
 
@@ -28,6 +28,11 @@ Paki4.xlsx (серая таблица A1:U16: «1. здоровье/базовы
 # Отдельный диапазон ID — исторически использовался и как id корзины,
 # сейчас просто уникальный идентификатор тарифа/пака.
 PACK_ID_OFFSET = 10000
+
+# Базовая скидка на все паки — 15%, одинаковая независимо от присяги.
+# Скидка уровня присяги (5/10/15%) СКЛАДЫВАЕТСЯ с этой базовой и
+# применяется одним разом от розничной суммы — см. pack_as_cart_item().
+BASE_DISCOUNT = 0.15
 
 
 def _pack(pack_id: int, name: str, tagline: str, items: list[tuple[str, str, int]],
@@ -111,10 +116,16 @@ def get_pack(pack_id: int) -> dict | None:
 
 def pack_as_cart_item(pack_id: int, tier_id: int | None = None) -> dict:
     """
-    Представление пака для корзины. Если у пользователя активна подписка
-    Ордена — цена пересчитывается с учётом скидки уровня (5/10/15%).
+    Представление пака для корзины.
 
-    tier_id — id активного уровня подписки пользователя (None = без подписки).
+    Скидки СКЛАДЫВАЮТСЯ и применяются ОДНИМ РАЗОМ от розничной суммы —
+    подтверждено заказчиком на примере: пак "Здоровье" (розница 15 954 ₽)
+    для уровня "Военачальник" (база 15% + уровень 15% = 30%):
+        15 954 × (1 − 30%) = 11 168 ₽
+    (а НЕ последовательно: 15954×0.85×0.85 — так было раньше, это неверно).
+
+    tier_id — id активного уровня присяги пользователя (None = без присяги,
+    тогда действует только базовая скидка BASE_DISCOUNT).
     """
     import subscription_tiers
 
@@ -122,11 +133,19 @@ def pack_as_cart_item(pack_id: int, tier_id: int | None = None) -> dict:
     if not p:
         return {"id": pack_id, "name": "Неизвестный сундук", "price": 0}
 
-    discount = subscription_tiers.pack_discount_for(tier_id)
-    price = round(p["bundle_price"] * (1 - discount))
+    tier_discount = subscription_tiers.pack_discount_for(tier_id)
+    total_discount = BASE_DISCOUNT + tier_discount
+    price = round(p["retail_total"] * (1 - total_discount))
     return {"id": pack_id, "name": f"Сундук «{p['name']}»", "price": price}
 
 
 def price_for(pack_id: int, tier_id: int | None = None) -> int:
-    """Итоговая цена пака с учётом скидки подписки."""
+    """Итоговая цена пака с учётом скидки присяги (складываются, см. pack_as_cart_item)."""
     return pack_as_cart_item(pack_id, tier_id)["price"]
+
+
+def total_discount_percent(tier_id: int | None = None) -> int:
+    """Суммарный процент скидки (база + уровень) — для отображения в тексте."""
+    import subscription_tiers
+    tier_discount = subscription_tiers.pack_discount_for(tier_id)
+    return int(round((BASE_DISCOUNT + tier_discount) * 100))

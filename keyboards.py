@@ -95,7 +95,7 @@ def categories_keyboard_dict() -> dict:
         icon_custom_emoji_id=emoji_ids.SCROLL,
     )])
     # Военные Сундуки — готовые наборы. Живут в каталоге как обычные
-    # товары (подписка не нужна), внизу списка категорий.
+    # товары (присяга не нужна), внизу списка категорий.
     rows.append([emoji_ui.build_emoji_button(
         "Военные Сундуки", callback_data="packs_list",
         icon_custom_emoji_id=emoji_ids.SHIELD,
@@ -267,11 +267,11 @@ def consent_keyboard_dict() -> dict:
     ]])
 
 
-# ---------- Орден: уровни подписки ----------
+# ---------- Орден: уровни присяги ----------
 
 def order_menu_keyboard_dict(has_subscription: bool) -> dict:
     """
-    Главный экран Ордена. Показывает три уровня подписки; если подписка
+    Главный экран Ордена. Показывает три уровня присяги; если присяга
     уже активна — уровни всё равно видны (можно посмотреть, что даёт
     следующий), но помечено, какой активен.
     """
@@ -290,7 +290,7 @@ def order_menu_keyboard_dict(has_subscription: bool) -> dict:
         )])
     if has_subscription:
         rows.append([emoji_ui.build_emoji_button(
-            "Моя подписка", callback_data="my_subscription",
+            "Моя присяга", callback_data="my_subscription",
             icon_custom_emoji_id=emoji_ids.DIAMOND, style="success",
         )])
     return emoji_ui.build_emoji_keyboard(rows)
@@ -298,7 +298,7 @@ def order_menu_keyboard_dict(has_subscription: bool) -> dict:
 
 def tier_detail_keyboard_dict(tier_id: int, has_subscription: bool, is_current: bool) -> dict:
     """
-    Под карточкой уровня. Оформить можно, только если подписки ещё нет.
+    Под карточкой уровня. Оформить можно, только если присяги ещё нет.
     Если уже подписан на этот же уровень — статус-кнопка. Если подписан
     на другой — смена тарифа заявлена в Excel, но механика перерасчёта
     ещё не согласована с сайтом, поэтому пока просто сообщаем об этом.
@@ -335,7 +335,7 @@ def my_subscription_keyboard_dict(is_frozen: bool = False) -> dict:
     rows = []
     if not is_frozen:
         rows.append([emoji_ui.build_emoji_button(
-            "Заморозить подписку", callback_data="freeze_prompt",
+            "Заморозить присягу", callback_data="freeze_prompt",
             icon_custom_emoji_id=emoji_ids.DROP,
         )])
     rows.append([emoji_ui.build_emoji_button(
@@ -368,7 +368,7 @@ def packs_list_keyboard_dict(tier_id: int | None = None) -> dict:
     """Три сундука (Здоровье/Качалка/Эксклюзив) + возврат к категориям."""
     # Капля (здоровье/добавки), кинжал (тренировки), редкий изумруд-акцент
     # (эксклюзив). Специально не те же иконки, что у уровней Ордена (BOX_*),
-    # чтобы паки и подписку не путать визуально.
+    # чтобы паки и присягу не путать визуально.
     pack_icons = [emoji_ids.DROP, emoji_ids.DAGGER, emoji_ids.EMERALD]
 
     rows = []

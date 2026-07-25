@@ -180,7 +180,7 @@ def _handle_referral_start_param(message):
             referrer_id,
             f"{_sword} <b>По твоей ссылке пришёл новый соратник!</b>\n\n"
             f"Он получит скидку {referrals_db.INVITEE_DISCOUNT_PERCENT}% на первую "
-            f"подписку. Как только он вступит в Орден — это засчитается тебе.",
+            f"присягу. Как только он вступит в Орден — это засчитается тебе.",
             parse_mode="HTML",
         )
     except Exception:
@@ -307,8 +307,8 @@ def handle_catlist(call):
 
 # ---------- Военные Сундуки (паки) — в каталоге ----------
 # Готовые наборы товаров со скидкой 15% против розницы. Живут в каталоге,
-# подписка для покупки НЕ нужна — её может купить кто угодно. Подписчикам
-# Ордена полагается дополнительная скидка 5/10/15% в зависимости от уровня
+# подписка для покупки НЕ нужна — её может купить кто угодно. Присягнувшим
+# Ордену полагается дополнительная скидка 5/10/15% в зависимости от уровня
 # (см. subscription_tiers.pack_discount_for).
 
 
@@ -329,7 +329,7 @@ def _pack_intro_text(tier_id) -> str:
     if discount:
         tier = subscription_tiers.get_tier(tier_id)
         lines.append(
-            f"\n{_diamond} <b>Твоя подписка «{tier['name']}» даёт ещё "
+            f"\n{_diamond} <b>Твоя присяга «{tier['name']}» даёт ещё "
             f"−{int(discount * 100)}%</b> — цены ниже уже с учётом этого."
         )
     else:
@@ -368,7 +368,7 @@ def handle_packs_list(call):
 
 
 def _pack_detail_text(pack: dict, tier_id) -> str:
-    """Карточка сундука: состав, розница, цена, экономия, скидка подписки."""
+    """Карточка сундука: состав, розница, цена, экономия, скидка присяги."""
     _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
     _sword = f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji>'
     _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
@@ -393,18 +393,18 @@ def _pack_detail_text(pack: dict, tier_id) -> str:
 
     if discount:
         tier = subscription_tiers.get_tier(tier_id)
+        total_pct = packs.total_discount_percent(tier_id)
         lines += [
-            f"Цена сундука: <s>{pack['bundle_price']} ₽</s>",
             f"{_diamond} <b>Твоя цена: {final_price} ₽</b> "
-            f"<i>(−{int(discount * 100)}% по подписке «{tier['name']}»)</i>",
+            f"<i>(−{total_pct}% — базовая скидка 15% + присяга «{tier['name']}»)</i>",
             f"Экономия: <b>{pack['retail_total'] - final_price} ₽</b>",
         ]
     else:
         lines += [
             f"{_diamond} <b>Цена сундука: {final_price} ₽</b>",
-            f"Экономия: <b>{pack['savings']} ₽</b> (−15%)",
+            f"Экономия: <b>{pack['retail_total'] - final_price} ₽</b> (−{packs.total_discount_percent(None)}%)",
             "",
-            f"{_shield} <i>С подпиской Ордена этот сундук стоил бы "
+            f"{_shield} <i>Принеся присягу Ордену, этот сундук стоил бы "
             f"от {packs.price_for(pack['id'], subscription_tiers.TIERS[0]['id'])} ₽.</i>",
         ]
 
@@ -438,7 +438,7 @@ def handle_pack_detail(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("pack_add:"))
 @safe_handler(bot)
 def handle_pack_add(call):
-    """Кладёт сундук в корзину — доступно всем, подписка не требуется."""
+    """Кладёт сундук в корзину — доступно всем, присяга не требуется."""
     pack_id = int(call.data.split(":")[1])
     pack = packs.get_pack(pack_id)
     if not pack:
@@ -622,7 +622,7 @@ def handle_checkout(call):
     bot.answer_callback_query(call.id)
     items_list = list(user_cart.keys())
 
-    # Реферальная скидка 20% по Excel даётся на ПОДПИСКУ, а не на обычный
+    # Реферальная скидка 20% по Excel даётся на ПРИСЯГУ, а не на обычный
     # заказ — поэтому здесь всегда стандартный промокод бота.
     response = create_order(
         telegram_id=user_id,
@@ -701,7 +701,7 @@ def handle_checkout(call):
 
 # ---------- Пригласить соратника (реферальная система) ----------
 # Правила из Excel заказчика: приглашённый получает скидку 20% на первую
-# годовую подписку; у пригласившего есть ступени 1 / 3 / 6 приглашённых.
+# годовую присягу; у пригласившего есть ступени 1 / 3 / 6 приглашённых.
 # ⚠️ Что именно даётся пригласившему на каждой ступени — в Excel НЕ указано
 # (колонка пустая), поэтому здесь показываем только прогресс. Как только
 # заказчик определится — вписать в referrals_db.MILESTONE_REWARDS.
@@ -733,7 +733,7 @@ def handle_invite(message):
         f"{_sword} <b>Пригласить соратника</b>\n",
         f"{_scroll} Отправь другу свою ссылку. Он получит "
         f"<b>скидку {referrals_db.INVITEE_DISCOUNT_PERCENT}%</b> на первую "
-        f"годовую подписку Ордена.",
+        f"годовую присягу Ордену.",
         "",
         f"{_sword} <b>Твоя ссылка:</b>",
         f"<code>{link}</code>",
@@ -800,10 +800,10 @@ def handle_orders(message):
     show_content(message.chat.id, user_id, "\n".join(lines), parse_mode="HTML")
 
 
-# ---------- Орден: уровни подписки ----------
+# ---------- Орден: уровни присяги ----------
 # Три уровня из Excel заказчика: Оруженосец / Рыцарь / Военачальник.
 # Годовая оплата, оплата идёт на сайте (не через корзину).
-# Паки сюда НЕ входят — они в каталоге; подписка лишь даёт на них скидку.
+# Паки сюда НЕ входят — они в каталоге; присяга лишь даёт на них скидку.
 
 
 def _order_menu_text(sub: dict | None, has_sub: bool) -> str:
@@ -930,7 +930,7 @@ def _tier_detail_text(tier: dict, is_current: bool, invitee_discount: bool) -> s
     if invitee_discount and not is_current:
         lines += [
             "",
-            f"{_diamond} <b>Тебя пригласил соратник — на первую подписку "
+            f"{_diamond} <b>Тебя пригласил соратник — на первую присягу "
             f"действует скидка {referrals_db.INVITEE_DISCOUNT_PERCENT}%!</b>",
         ]
 
@@ -965,8 +965,8 @@ def handle_tier_detail(call):
 @safe_handler(bot)
 def handle_tier_subscribe(call):
     """
-    Оформление подписки на выбранный уровень. Оплата идёт на сайте —
-    в корзину подписка не кладётся.
+    Принесение присяги на выбранный уровень. Оплата идёт на сайте —
+    в корзину присяга не кладётся.
     """
     tier_id = int(call.data.split(":")[1])
     tier = subscription_tiers.get_tier(tier_id)
@@ -985,7 +985,7 @@ def handle_tier_subscribe(call):
     # tier_id обратно в вебхуке (см. subscriptions_db.record_pending_subscription).
     subscriptions_db.record_pending_subscription(user_id, tier_id)
 
-    # Скидка 20% приглашённому на первую годовую подписку (из Excel).
+    # Скидка 20% приглашённому на первую годовую присягу (из Excel).
     promo = "REF20" if referrals_db.has_pending_invitee_discount(user_id) else None
     response = create_subscription_order(telegram_id=user_id, tier_id=tier_id, promotions=promo)
 
@@ -994,8 +994,8 @@ def handle_tier_subscribe(call):
         _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
         show_content(
             call.message.chat.id, user_id,
-            f"{_shield} <b>Оплата подписки временно недоступна.</b>\n\n"
-            "Приём платежей за подписку ещё настраивается. Загляни позже "
+            f"{_shield} <b>Принесение присяги временно недоступно.</b>\n\n"
+            "Приём платежей ещё настраивается. Загляни позже "
             "или напиши в поддержку.",
             parse_mode="HTML",
         )
@@ -1047,14 +1047,14 @@ def handle_tier_switch(call):
 @bot.callback_query_handler(func=lambda c: c.data == "my_subscription")
 @safe_handler(bot)
 def handle_my_subscription(call):
-    """Экран текущей подписки — что активно, до какой даты, что даёт."""
+    """Экран текущей присяги — что активна, до какой даты, что даёт."""
     user_id = call.from_user.id
     sub = subscriptions_db.get_subscription(user_id)
 
     # ВАЖНО: has_active_subscription() возвращает False и во время
     # заморозки (доступ приостановлен по задумке) — но экран "Моя
-    # подписка" должен показываться и в этом случае, просто со статусом
-    # "на паузе", а не говорить пользователю, что подписки нет вообще.
+    # присяга" должен показываться и в этом случае, просто со статусом
+    # "на паузе", а не говорить пользователю, что присяги нет вообще.
     # Поэтому здесь проверяем именно срок действия, а не has_active_subscription.
     expires_at = None
     if sub and sub.get("expires_at"):
@@ -1065,7 +1065,7 @@ def handle_my_subscription(call):
             expires_at = None
 
     if not sub or not expires_at or expires_at <= datetime.now(expires_at.tzinfo):
-        bot.answer_callback_query(call.id, "Активной подписки нет")
+        bot.answer_callback_query(call.id, "Активной присяги нет")
         return
 
     bot.answer_callback_query(call.id)
@@ -1080,14 +1080,14 @@ def handle_my_subscription(call):
     expires = _format_date(sub.get("expires_at"))
 
     lines = [
-        f"{_diamond} <b>Твоя подписка</b>\n",
+        f"{_diamond} <b>Твоя присяга</b>\n",
         f"{_shield} Уровень: <b>{sub.get('tier_name')}</b>",
     ]
 
     if is_frozen:
         frozen_until = _format_date(sub.get("frozen_until"))
         lines.append(
-            f"\n{_drop} <b>Подписка на паузе до {frozen_until}.</b>\n"
+            f"\n{_drop} <b>Присяга на паузе до {frozen_until}.</b>\n"
             f"Доступ приостановлен, но дата окончания сдвинута — оплаченное "
             f"время не потеряно."
         )
@@ -1119,19 +1119,19 @@ def handle_freeze_prompt(call):
     """Показывает варианты срока заморозки (7/14/30 дней)."""
     user_id = call.from_user.id
     if not subscriptions_db.has_active_subscription(user_id):
-        bot.answer_callback_query(call.id, "Активной подписки нет")
+        bot.answer_callback_query(call.id, "Активной присяги нет")
         return
     if subscriptions_db.is_frozen(user_id):
-        bot.answer_callback_query(call.id, "Подписка уже на паузе")
+        bot.answer_callback_query(call.id, "Присяга уже на паузе")
         return
 
     bot.answer_callback_query(call.id)
     _drop = f'<tg-emoji emoji-id="{emoji_ids.DROP}">💧</tg-emoji>'
     edit_or_resend(
         call.message.chat.id, user_id, call.message.message_id,
-        f"{_drop} <b>На сколько дней заморозить подписку?</b>\n\n"
+        f"{_drop} <b>На сколько дней заморозить присягу?</b>\n\n"
         "Доступ будет приостановлен на выбранный срок, а дата окончания "
-        "подписки сдвинется на столько же дней вперёд — оплаченное время "
+        "присяги сдвинется на столько же дней вперёд — оплаченное время "
         "не потеряется. Максимум 30 дней.",
         reply_markup=keyboards.freeze_options_keyboard_dict(),
     )
@@ -1140,7 +1140,7 @@ def handle_freeze_prompt(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("freeze_do:"))
 @safe_handler(bot)
 def handle_freeze_do(call):
-    """Реально замораживает подписку на выбранный срок."""
+    """Реально замораживает присягу на выбранный срок."""
     days = int(call.data.split(":")[1])
     user_id = call.from_user.id
 
@@ -1150,13 +1150,13 @@ def handle_freeze_do(call):
         reason = result.get("reason")
         messages = {
             "invalid_days": "Некорректный срок",
-            "no_subscription": "Активной подписки нет",
-            "already_frozen": "Подписка уже на паузе",
+            "no_subscription": "Активной присяги нет",
+            "already_frozen": "Присяга уже на паузе",
         }
         bot.answer_callback_query(call.id, messages.get(reason, "Не получилось"))
         return
 
-    bot.answer_callback_query(call.id, "Подписка заморожена ❄")
+    bot.answer_callback_query(call.id, "Присяга заморожена ❄")
     analytics.log_event(user_id, call.from_user.username, "subscription_frozen", f"{days} дней")
 
     _drop = f'<tg-emoji emoji-id="{emoji_ids.DROP}">💧</tg-emoji>'
@@ -1164,8 +1164,8 @@ def handle_freeze_do(call):
     new_expires = _format_date(result["new_expires_at"])
     edit_or_resend(
         call.message.chat.id, user_id, call.message.message_id,
-        f"{_drop} <b>Подписка заморожена на {days} дней.</b>\n\n"
-        f"Доступ приостановлен до {frozen_until}, дата окончания подписки "
+        f"{_drop} <b>Присяга заморожена на {days} дней.</b>\n\n"
+        f"Доступ приостановлен до {frozen_until}, дата окончания присяги "
         f"сдвинута на {new_expires}.",
         reply_markup=keyboards.my_subscription_keyboard_dict(is_frozen=True),
     )

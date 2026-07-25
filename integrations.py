@@ -92,7 +92,7 @@ def _error_response() -> dict:
 
 
 # ЖДЁМ ОТ ФЁДОРА: отдельный (или тот же самый?) эндпоинт для оплаты
-# подписки "Орден" — этого ещё нет в согласованной схеме, см. список
+# присяги Ордену — этого ещё нет в согласованной схеме, см. список
 # вопросов. Пока используем ту же переменную, что и обычный заказ, как
 # временную заглушку, чтобы код не падал — как только он даст точный
 # адрес, здесь меняется одна строка.
@@ -101,11 +101,11 @@ SITE_SUBSCRIPTION_ENDPOINT = os.environ.get("SITE_SUBSCRIPTION_ENDPOINT", "")
 
 def create_subscription_order(telegram_id: int, tier_id: int, promotions: str | None = None) -> dict:
     """
-    Запрос на оплату годовой подписки Ордена на конкретный уровень
+    Запрос на принесение годовой присяги Ордену на конкретный уровень
     (Оруженосец / Рыцарь / Военачальник — см. subscription_tiers.py).
 
     promotions — промокод, если есть. Сейчас используется REF20 (скидка 20%
-    приглашённому на первую годовую подписку, по Excel заказчика).
+    приглашённому на первую годовую присягу, по Excel заказчика).
 
     ⚠️ SITE_SUBSCRIPTION_ENDPOINT ещё не согласован с Фёдором — пока
     переменная пустая, функция сразу возвращает error, и handle_tier_subscribe
@@ -113,7 +113,7 @@ def create_subscription_order(telegram_id: int, tier_id: int, promotions: str | 
     падения или зависания.
     """
     if not SITE_SUBSCRIPTION_ENDPOINT or not X_BOT_TOKEN:
-        logger.error("Оплата подписки недоступна: эндпоинт или токен ещё не настроены Фёдором")
+        logger.error("Принесение присяги недоступно: эндпоинт или токен ещё не настроены Фёдором")
         return _error_response()
 
     payload = {
@@ -132,12 +132,12 @@ def create_subscription_order(telegram_id: int, tier_id: int, promotions: str | 
         )
         response.raise_for_status()
         data = response.json()
-        logger.info("Запрос на подписку создан: telegram_id=%s tier_id=%s order_id=%s",
+        logger.info("Запрос на присягу создан: telegram_id=%s tier_id=%s order_id=%s",
                      telegram_id, tier_id, data.get("order_id"))
         return data
     except requests.exceptions.RequestException as e:
-        logger.error("Ошибка при создании подписки для telegram_id=%s: %s", telegram_id, e)
+        logger.error("Ошибка при создании присяги для telegram_id=%s: %s", telegram_id, e)
         return _error_response()
     except ValueError as e:
-        logger.error("Сайт вернул невалидный JSON для подписки telegram_id=%s: %s", telegram_id, e)
+        logger.error("Сайт вернул невалидный JSON для присяги telegram_id=%s: %s", telegram_id, e)
         return _error_response()
