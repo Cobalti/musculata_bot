@@ -338,8 +338,27 @@ def my_subscription_keyboard_dict(is_frozen: bool = False) -> dict:
             "Заморозить присягу", callback_data="freeze_prompt",
             icon_custom_emoji_id=emoji_ids.DROP,
         )])
+        rows.append([emoji_ui.build_emoji_button(
+            "Бесплатный пак №4", callback_data="pack4",
+            icon_custom_emoji_id=emoji_ids.SHIELD,
+        )])
     rows.append([emoji_ui.build_emoji_button(
         "К уровням", callback_data="order_menu",
+        icon_custom_emoji_id=emoji_ids.SCROLL,
+    )])
+    return emoji_ui.build_emoji_keyboard(rows)
+
+
+def pack4_keyboard_dict(has_composition: bool, already_claimed: bool) -> dict:
+    """Клавиатура экрана Пака №4: 'Забрать' только если состав задан и ещё не забирал."""
+    rows = []
+    if has_composition and not already_claimed:
+        rows.append([emoji_ui.build_emoji_button(
+            "Забрать пак", callback_data="pack4_claim",
+            icon_custom_emoji_id=emoji_ids.DIAMOND, style="success",
+        )])
+    rows.append([emoji_ui.build_emoji_button(
+        "К присяге", callback_data="my_subscription",
         icon_custom_emoji_id=emoji_ids.SCROLL,
     )])
     return emoji_ui.build_emoji_keyboard(rows)

@@ -3,19 +3,28 @@ emoji_ui.py — отправка сообщений с кастомными эм
 через прямые HTTP-запросы к Telegram Bot API.
 
 ПОЧЕМУ НЕ ЧЕРЕЗ pyTelegramBotAPI:
-Bot API 9.4 (вышел в феврале 2026) добавил в InlineKeyboardButton/
-KeyboardButton поля `style` и `icon_custom_emoji_id`. На момент написания
-этого модуля pyTelegramBotAPI (даже последняя версия 4.24.0) эти поля
-в своих классах ещё не поддерживает — библиотека не успела обновиться.
-Чтобы не ждать её обновления, кнопки с эмодзи/цветом собираются как
-обычные Python-словари в формате, который Telegram ожидает по API,
-и отправляются напрямую через requests, в обход объектной модели telebot.
+Bot API 9.4 добавил в InlineKeyboardButton/KeyboardButton поле
+`icon_custom_emoji_id`. На момент написания этого модуля
+pyTelegramBotAPI это поле в своих классах ещё не поддерживает —
+библиотека не успела обновиться. Чтобы не ждать её обновления, кнопки
+с эмодзи собираются как обычные Python-словари в формате, который
+Telegram ожидает по API, и отправляются напрямую через requests, в
+обход объектной модели telebot.
+
+ВАЖНО (исправлено): раньше здесь ошибочно предполагалось, что
+InlineKeyboardButton поддерживает ещё и поле `style` для раскраски
+кнопки (primary/success/danger). Это неверно — программной раскраски
+inline-кнопок в Bot API нет и не было никогда. Отправка такого поля
+в JSON могла приводить к тому, что Telegram отклонял сообщение целиком
+(на практике поймали случай, когда пользователь получал текст согласия
+на ОПД вообще БЕЗ кнопки "Принимаю"). Поле убрано — build_emoji_button
+больше не добавляет "style" в словарь кнопки.
 
 Обычный bot.send_message()/bot.send_photo() из main.py продолжают
 работать как прежде для всего остального — этот модуль нужен только
-там, где явно требуется icon_custom_emoji_id или style на кнопке,
-либо кастомный эмодзи в тексте (хотя для текста это можно сделать
-и через обычный bot.send_message с parse_mode="HTML" — см. пример ниже).
+там, где явно требуется icon_custom_emoji_id на кнопке, либо кастомный
+эмодзи в тексте (хотя для текста это можно сделать и через обычный
+bot.send_message с parse_mode="HTML" — см. пример ниже).
 
 ТРЕБОВАНИЕ TELEGRAM: кастомные эмодзи в сообщениях/кнопках работают,
 только если у ВЛАДЕЛЬЦА бота есть подписка Telegram Premium.
@@ -128,10 +137,20 @@ def send_photo_with_emoji(chat_id: int, photo_file, caption_html: str,
 def build_emoji_button(text: str, callback_data: str | None = None, url: str | None = None,
                         style: str | None = None, icon_custom_emoji_id: str | None = None) -> dict:
     """
-    Собирает один inline-кнопку-словарь с поддержкой style/icon_custom_emoji_id.
+    Собирает один inline-кнопку-словарь с поддержкой icon_custom_emoji_id.
 
-    style: "primary" (синяя) | "success" (зелёная) | "danger" (красная) | None (обычная)
     icon_custom_emoji_id: ID эмодзи, полученный через get_emoji_ids.py
+
+    ВАЖНО: параметр `style` НЕ используется и НИКУДА не передаётся —
+    в реальном Telegram Bot API у InlineKeyboardButton нет и не было
+    такого поля (программной раскраски inline-кнопок Bot API не
+    поддерживает вообще). Раньше это поле ошибочно добавлялось прямо
+    в словарь кнопки и отправлялось в Telegram как есть — это могло
+    приводить к тому, что Telegram отклонял всё сообщение целиком
+    (реальный случай: пользователь получал текст без кнопки "Принимаю"
+    вообще). Параметр оставлен в сигнатуре, чтобы не переписывать 14
+    мест вызова по всему проекту, но теперь он ничего не делает —
+    просто тихо игнорируется.
 
     Ровно один из callback_data/url должен быть указан — как в обычной
     InlineKeyboardButton.
@@ -141,8 +160,6 @@ def build_emoji_button(text: str, callback_data: str | None = None, url: str | N
         button["callback_data"] = callback_data
     if url:
         button["url"] = url
-    if style:
-        button["style"] = style
     if icon_custom_emoji_id:
         button["icon_custom_emoji_id"] = icon_custom_emoji_id
     return button

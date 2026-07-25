@@ -23,6 +23,7 @@ import subscription_tiers
 import referrals_db
 import consent_db
 import health_check
+import pack4_db
 import emoji_ui
 import emoji_ids
 import packs
@@ -205,18 +206,22 @@ def start_message(message):
         # Жёсткий вариант согласия: без нажатия кнопки "Принимаю" бот
         # дальше меню не показывает вообще (see errors.safe_handler —
         # он же блокирует и остальные разделы для этого пользователя).
-        if not state.get_consent_message(user_id):
-            result = emoji_ui.send_message_with_emoji(
-                message.chat.id, CONSENT_TEXT,
-                reply_markup=keyboards.consent_keyboard_dict(),
-            )
-            if result.get("ok"):
-                state.set_consent_message(user_id, result["result"]["message_id"])
-        else:
-            bot.send_message(
-                message.chat.id,
-                "Чтобы продолжить, нажми «Принимаю» в сообщении с условиями выше ⬆️",
-            )
+        #
+        # ВАЖНО: раньше повторный /start слал только текстовое напоминание
+        # "нажми кнопку выше", полагаясь на то, что кнопка из первого
+        # сообщения ещё видна и работает. На практике поймали реальный
+        # случай, когда кнопка не дошла до пользователя вообще (см. фикс
+        # в emoji_ui.py про несуществующее поле "style") — человек писал
+        # /start пять раз подряд и просто утыкался в напоминание про
+        # кнопку, которой физически не было. Теперь при КАЖДОМ /start без
+        # согласия шлём заново полное сообщение с кнопкой — это чуть более
+        # многословно в чате, зато гарантированно рабочий путь вперёд.
+        result = emoji_ui.send_message_with_emoji(
+            message.chat.id, CONSENT_TEXT,
+            reply_markup=keyboards.consent_keyboard_dict(),
+        )
+        if result.get("ok"):
+            state.set_consent_message(user_id, result["result"]["message_id"])
         return
 
     # Меню пересоздаём при КАЖДОМ /start — не только при первом обращении.
@@ -1171,6 +1176,205 @@ def handle_freeze_do(call):
     )
 
 
+# ---------- Пак №4: бесплатный ежемесячный набор для присягнувших ----------
+# Из ТЗ по подпискам: "уникальный, отдельно не продаётся, состав меняется
+# каждый месяц". Бот НЕ занимается физической отправкой — только честно
+# фиксирует, кто имеет право и кто уже забрал в этом месяце, и уведомляет
+# админа о каждом заборе, чтобы было видно, кому готовить посылку.
+
+
+def _pack4_text(comp: dict | None, already_claimed: bool) -> str:
+    _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
+    _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
+    _sword = f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji>'
+    _scroll = f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji>'
+
+    if not comp:
+        return (
+            f"{_shield} <b>Пак №4 — бесплатный подарок присягнувшим</b>\n\n"
+            f"{_scroll} Состав этого месяца ещё не объявлен — загляни чуть позже."
+        )
+
+    lines = [
+        f"{_shield} <b>Пак №4 — бесплатный подарок присягнувшим</b>\n",
+        f"{_scroll} <b>Состав этого месяца:</b>",
+    ]
+    for item in comp["items"]:
+        lines.append(f"{_sword} {item['name']} <i>({item['brand']})</i> — {item['price']} ₽")
+
+    if comp.get("gift"):
+        lines.append(f"\n{_diamond} <b>Плюс:</b> {comp['gift']}")
+
+    if already_claimed:
+        lines.append(f"\n{_diamond} <i>Ты уже забрал этот пак в этом месяце — увидимся в следующем!</i>")
+
+    return "\n".join(lines)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "pack4")
+@safe_handler(bot)
+def handle_pack4(call):
+    """Экран пака №4 — доступен только присягнувшим (и не во время заморозки)."""
+    user_id = call.from_user.id
+    if not subscriptions_db.has_active_subscription(user_id):
+        bot.answer_callback_query(call.id, "Нужна присяга Ордену")
+        return
+
+    bot.answer_callback_query(call.id)
+    comp = pack4_db.get_current_composition()
+    already_claimed = pack4_db.has_claimed(user_id)
+
+    edit_or_resend(
+        call.message.chat.id, user_id, call.message.message_id,
+        _pack4_text(comp, already_claimed),
+        reply_markup=keyboards.pack4_keyboard_dict(has_composition=bool(comp), already_claimed=already_claimed),
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "pack4_claim")
+@safe_handler(bot)
+def handle_pack4_claim(call):
+    """Забрать пак №4 — раз в месяц, без повторов."""
+    user_id = call.from_user.id
+    if not subscriptions_db.has_active_subscription(user_id):
+        bot.answer_callback_query(call.id, "Нужна присяга Ордену")
+        return
+
+    comp = pack4_db.get_current_composition()
+    if not comp:
+        bot.answer_callback_query(call.id, "Состав ещё не объявлен")
+        return
+
+    claimed_now = pack4_db.claim(user_id)
+    if not claimed_now:
+        bot.answer_callback_query(call.id, "Уже забрал в этом месяце")
+        return
+
+    bot.answer_callback_query(call.id, "Пак забран ⚔")
+    analytics.log_event(user_id, call.from_user.username, "pack4_claimed", comp["month_key"])
+
+    # Бот не отправляет физически — просто честно сообщает админу, кому
+    # готовить посылку, вместе с контактом, чтобы можно было связаться.
+    if ADMIN_CHAT_ID:
+        user = call.from_user
+        full_name = " ".join(filter(None, [user.first_name, user.last_name])) or "—"
+        username_part = f"@{user.username}" if user.username else "(без username)"
+        try:
+            bot.send_message(
+                ADMIN_CHAT_ID,
+                f"🎁 Пак №4 забран: {full_name} {username_part} (user_id: {user_id})\n"
+                f"Месяц: {comp['month_key']}",
+            )
+        except Exception:
+            logger.warning("Не удалось уведомить админа о заборе пака №4")
+
+    edit_or_resend(
+        call.message.chat.id, user_id, call.message.message_id,
+        _pack4_text(comp, already_claimed=True),
+        reply_markup=keyboards.pack4_keyboard_dict(has_composition=True, already_claimed=True),
+    )
+
+
+@bot.message_handler(commands=["setpack4"])
+@safe_handler(bot, require_consent=False)
+def handle_setpack4_command(message):
+    """
+    Только для администратора — запускает ввод состава пака №4 на текущий
+    месяц. Простой текстовый формат вместо веб-панели: одна позиция на
+    строку "Название | Бренд | Цена", последняя строка опционально
+    "Подарок: текст".
+    """
+    delete_user_message(message)
+    if not ADMIN_CHAT_ID or message.from_user.id != int(ADMIN_CHAT_ID):
+        return  # тихо игнорируем — не администратор
+
+    state.set_awaiting_pack4_setup(message.from_user.id)
+    bot.send_message(
+        message.chat.id,
+        "🛡 Пришли состав пака №4 на этот месяц — по одной позиции на строку:\n\n"
+        "<code>Название | Бренд | Цена</code>\n\n"
+        "Последней строкой (не обязательно) можно добавить:\n"
+        "<code>Подарок: текст бонуса</code>\n\n"
+        "Пример:\n"
+        "<code>NOW Foods Vitamin C 1000mg | NOW Foods | 890\n"
+        "Trec Nutrition BCAA | Trec | 1200\n"
+        "Подарок: стикер набора этого месяца</code>\n\n"
+        "Чтобы отменить — /cancel_tech.",
+        parse_mode="HTML",
+    )
+
+
+def _parse_pack4_input(text: str) -> tuple[list[dict], str | None, list[str]]:
+    """
+    Разбирает текст админа в список позиций + опциональный подарок.
+    Возвращает (items, gift, errors) — errors непустой, если что-то
+    не распозналось (тогда состав НЕ сохраняем, просим исправить).
+    """
+    items = []
+    gift = None
+    errors = []
+
+    for line_no, raw_line in enumerate(text.strip().split("\n"), start=1):
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.lower().startswith("подарок:"):
+            gift = line.split(":", 1)[1].strip()
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if len(parts) != 3:
+            errors.append(f"Строка {line_no}: ожидал 'Название | Бренд | Цена', получил «{line}»")
+            continue
+        name, brand, price_str = parts
+        try:
+            price = int(price_str)
+        except ValueError:
+            errors.append(f"Строка {line_no}: цена «{price_str}» не похожа на число")
+            continue
+        if not name or not brand:
+            errors.append(f"Строка {line_no}: пустое название или бренд")
+            continue
+        items.append({"name": name, "brand": brand, "price": price})
+
+    if not items and not errors:
+        errors.append("Не нашёл ни одной позиции — пусто.")
+
+    return items, gift, errors
+
+
+@bot.message_handler(
+    func=lambda m: state.is_awaiting_pack4_setup(m.from_user.id) and m.text not in MENU_BUTTON_TEXTS,
+    content_types=["text"],
+)
+@safe_handler(bot, require_consent=False)
+def handle_pack4_setup_input(message):
+    """Парсит и сохраняет присланный админом состав пака №4."""
+    user_id = message.from_user.id
+    state.clear_awaiting_pack4_setup(user_id)
+    delete_user_message(message)
+
+    items, gift, errors = _parse_pack4_input(message.text)
+
+    if errors:
+        error_text = "\n".join(f"• {e}" for e in errors)
+        bot.send_message(
+            message.chat.id,
+            f"⚠️ Не смог разобрать состав:\n\n{error_text}\n\n"
+            f"Попробуй ещё раз командой /setpack4.",
+        )
+        return
+
+    pack4_db.set_composition(items, gift=gift)
+    analytics.log_event(user_id, message.from_user.username, "pack4_composition_set", f"{len(items)} позиций")
+
+    lines_preview = "\n".join(f"• {i['name']} ({i['brand']}) — {i['price']} ₽" for i in items)
+    gift_line = f"\nПодарок: {gift}" if gift else ""
+    bot.send_message(
+        message.chat.id,
+        f"✅ Состав пака №4 на {pack4_db.current_month_key()} сохранён:\n\n{lines_preview}{gift_line}",
+    )
+
+
 @bot.callback_query_handler(func=lambda c: c.data == "noop")
 @safe_handler(bot)
 def handle_noop(call):
@@ -1293,6 +1497,9 @@ def handle_cancel_tech(message):
             user_id,
             "❎ Отправка вопроса в поддержку отменена.",
         )
+    elif state.is_awaiting_pack4_setup(user_id):
+        state.clear_awaiting_pack4_setup(user_id)
+        bot.send_message(message.chat.id, "❎ Ввод состава пака №4 отменён.")
     else:
         show_content(
             message.chat.id,

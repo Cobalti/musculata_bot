@@ -85,3 +85,22 @@ def clear_consent_message(user_id: int):
     после первого принятия).
     """
     _consent_message.pop(user_id, None)
+
+
+# ---------- Пак №4: ожидание ввода состава от администратора ----------
+# Тот же паттерн, что и awaiting_support выше — админ жмёт /setpack4,
+# следующее его текстовое сообщение парсится как новый состав пака.
+
+_awaiting_pack4_setup: set[int] = set()
+
+
+def set_awaiting_pack4_setup(user_id: int):
+    _awaiting_pack4_setup.add(user_id)
+
+
+def is_awaiting_pack4_setup(user_id: int) -> bool:
+    return user_id in _awaiting_pack4_setup
+
+
+def clear_awaiting_pack4_setup(user_id: int):
+    _awaiting_pack4_setup.discard(user_id)
