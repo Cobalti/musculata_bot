@@ -193,6 +193,12 @@ def _handle_referral_start_param(message):
 @bot.message_handler(commands=["start"])
 @safe_handler(bot, require_consent=False)
 def start_message(message):
+    # /start в общем чате/канале Ордена (где бот теперь администратор,
+    # см. order_access.py) не должен запускать личный сценарий согласия
+    # на ОПД и открытия меню — это всё имеет смысл только в личном диалоге.
+    if getattr(message.chat, "type", "private") != "private":
+        return
+
     user_id = message.from_user.id
     delete_user_message(message)
     state.clear_content(user_id)

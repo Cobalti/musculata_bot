@@ -45,3 +45,15 @@ ANALYTICS_FILE = os.path.join(os.path.dirname(__file__), "analytics.csv")
 # Rate limiting — защита от спама/флуда одним пользователем.
 RATE_LIMIT_MAX_ACTIONS = 15      # не больше стольких действий
 RATE_LIMIT_WINDOW_SECONDS = 10   # за столько секунд
+
+# ---------- Орден: закрытый канал и чат ----------
+# Бот должен быть администратором в обоих местах, с правами приглашать
+# и блокировать/разблокировать участников (без этого не сможет ни
+# выдавать доступ по ссылке, ни забирать его при истечении присяги).
+# ID — числовые (вида -100...), не username. Если ещё не заведены —
+# оставь пустыми, весь функционал доступа просто тихо выключится
+# (см. order_access.py).
+_channel_id = os.environ.get("ORDER_CHANNEL_ID")
+_chat_id = os.environ.get("ORDER_CHAT_ID")
+ORDER_CHANNEL_ID = int(_channel_id) if _channel_id else None
+ORDER_CHAT_ID = int(_chat_id) if _chat_id else None

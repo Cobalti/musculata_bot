@@ -61,17 +61,22 @@ def _init_db():
                 site_order_id INTEGER,
                 started_at    TEXT NOT NULL,
                 expires_at    TEXT NOT NULL,
-                frozen_until  TEXT
+                frozen_until  TEXT,
+                access_granted INTEGER NOT NULL DEFAULT 0
             )
             """
         )
-        # Миграция для БД, созданных ДО появления заморозки — CREATE TABLE
-        # IF NOT EXISTS не добавит новую колонку в уже существующую таблицу,
-        # поэтому досоздаём её отдельно, если её ещё нет.
+        # Миграция для БД, созданных ДО появления заморозки/доступа в канал —
+        # CREATE TABLE IF NOT EXISTS не добавит новую колонку в уже
+        # существующую таблицу, поэтому досоздаём отдельно, если их нет.
         try:
             conn.execute("ALTER TABLE subscriptions ADD COLUMN frozen_until TEXT")
         except sqlite3.OperationalError:
-            pass  # колонка уже есть — база создана после этого изменения
+            pass
+        try:
+            conn.execute("ALTER TABLE subscriptions ADD COLUMN access_granted INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS pending_subscriptions (
@@ -322,6 +327,47 @@ def freeze_subscription(telegram_id: int, days: int) -> dict:
         telegram_id, days, frozen_until.isoformat(), new_expires.isoformat(),
     )
     return {"ok": True, "frozen_until": frozen_until.isoformat(), "new_expires_at": new_expires.isoformat()}
+
+
+def get_access_mismatches() -> list[dict]:
+    """
+    Сверка "что должно быть" (has_active_subscription — уже учитывает и
+    срок, и заморозку) с тем, что реально записано в access_granted.
+    Используется фоновой задачей (см. order_access.reconcile_access),
+    которая по этому списку либо выдаёт доступ в канал/чат, либо
+    забирает — единая точка правды для активации, окончания срока
+    И заморозки/разморозки, не три разных места в коде.
+
+    Возвращает [{"telegram_id", "should_have_access", "currently_granted"}, ...]
+    только для тех, где есть расхождение (иначе список был бы на весь
+    список подписчиков без всякой пользы).
+    """
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT telegram_id, access_granted FROM subscriptions WHERE status = 'active'"
+        ).fetchall()
+
+    mismatches = []
+    for row in rows:
+        telegram_id = row["telegram_id"]
+        should = has_active_subscription(telegram_id)
+        granted = bool(row["access_granted"])
+        if should != granted:
+            mismatches.append({
+                "telegram_id": telegram_id,
+                "should_have_access": should,
+                "currently_granted": granted,
+            })
+    return mismatches
+
+
+def set_access_granted(telegram_id: int, granted: bool) -> None:
+    """Фиксирует факт выдачи/отзыва доступа в канал/чат — вызывать после реального действия в Telegram."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE subscriptions SET access_granted = ? WHERE telegram_id = ?",
+            (1 if granted else 0, telegram_id),
+        )
 
 
 _init_db()

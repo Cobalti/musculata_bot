@@ -29,6 +29,7 @@ import hmac
 
 import orders_db
 import subscriptions_db
+import order_access
 import referrals_db
 import emoji_ids
 
@@ -193,6 +194,11 @@ def payment_success():
         # бонус приглашённому — скидка на первую годовую присягу).
         # mark_converted защищён от повторного вебхука.
         _handle_referral_conversion(telegram_id)
+
+        # Доступ в канал/чат Ордена — сразу, не дожидаясь фоновой сверки
+        # (см. run.py, start_order_access_reconciliation — она подстрахует,
+        # если этот прямой вызов почему-то не сработает).
+        order_access.grant_access(bot, telegram_id)
 
         logger.info("payment-success (присяга): telegram_id=%s order_id=%s tier=%s",
                      telegram_id, order_id, tier_name)

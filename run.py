@@ -18,11 +18,36 @@ main.py по-прежнему можно запускать отдельно д�
 """
 
 import logging
+import threading
 import time
 
 import main as bot_main
+import order_access
 
 logger = logging.getLogger("run")
+
+
+def start_order_access_reconciliation(interval_seconds: int = 900):
+    """
+    Раз в interval_seconds (по умолчанию 15 минут) сверяет всех
+    присягнувших с реальным доступом в канал/чат Ордена — выдаёт,
+    где не хватает (например, разморозка), забирает, где просрочено
+    или заморожено. Активация присяги выдаёт доступ сразу же отдельно
+    (см. webhooks.py) — эта фоновая сверка подстраховывает на случай,
+    если тот прямой вызов не сработал, плюс единственная точка, которая
+    вообще обрабатывает истечение срока и заморозку/разморозку.
+    """
+    def _loop():
+        while True:
+            time.sleep(interval_seconds)
+            try:
+                order_access.reconcile_access(bot_main.bot)
+            except Exception:
+                logger.exception("Ошибка в фоновой сверке доступа Ордена")
+
+    thread = threading.Thread(target=_loop, daemon=True)
+    thread.start()
+    logger.info("Фоновая сверка доступа Ордена запущена (каждые %s сек.)", interval_seconds)
 
 
 def start_bot_polling():
@@ -97,6 +122,7 @@ def main():
     # заполнился) уже во время работы, а не только в момент старта процесса.
     bot_main.run_startup_healthcheck()
     bot_main.health_check.start_periodic_check(bot_main.BOT_TOKEN)
+    start_order_access_reconciliation()
 
     # Поллинг — в основном потоке (раньше был в фоновом, потому что
     # Flask занимал главный поток; теперь Flask здесь вообще нет, так что

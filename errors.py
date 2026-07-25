@@ -53,6 +53,27 @@ def _chat_id_of(update):
     return None
 
 
+def _is_private_chat(update) -> bool:
+    """
+    True, если сообщение/колбэк пришли из личного диалога с ботом (не из
+    группы/супергруппы/канала). Нужно, чтобы согласие на ОПД и подобные
+    личные вещи не сыпались в общий чат/канал Ордена — бот теперь состоит
+    там как администратор (см. order_access.py), и Telegram может слать
+    боту апдейты из этих мест, но реагировать на них как на личный диалог
+    с пользователем не нужно.
+
+    По умолчанию (если тип чата определить не удалось — например, в
+    тестах на моках без атрибута .type) считаем приватным, чтобы не
+    сломать существующее поведение там, где chat.type не задан.
+    """
+    chat = getattr(update, "chat", None)
+    if chat is None:
+        msg = getattr(update, "message", None)
+        chat = getattr(msg, "chat", None) if msg else None
+    chat_type = getattr(chat, "type", "private")
+    return chat_type == "private"
+
+
 def _reply(bot, update, text: str):
     """Отправляет текст в тот же чат, откуда пришло сообщение/колбэк."""
     chat_id = _chat_id_of(update)
@@ -71,6 +92,11 @@ def _reply(bot, update, text: str):
 
 
 def _remind_consent(bot, update):
+    # В группе/канале Ордена (где бот теперь администратор) напоминание
+    # про личное согласие на ОПД неуместно — молча пропускаем, отвечаем
+    # только в личных диалогах.
+    if not _is_private_chat(update):
+        return
     _reply(
         bot, update,
         "Чтобы пользоваться ботом, сначала нажми «Принимаю» под "
