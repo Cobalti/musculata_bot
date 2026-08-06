@@ -634,11 +634,19 @@ def handle_checkout(call):
     items_list = list(user_cart.keys())
 
     # Реферальная скидка 20% по Excel даётся на ПРИСЯГУ, а не на обычный
-    # заказ — поэтому здесь всегда стандартный промокод бота.
+    # заказ — поэтому здесь всегда стандартный промокод бота. НО: по
+    # документации сайта (wp_endpoints_api.pdf) обычный купон
+    # ДОПОЛНИТЕЛЬНО К ПАКУ НЕ ПРИМЕНЯЕТСЯ — скидка на пак (15% база +
+    # скидка уровня присяги) считается сайтом отдельно и самостоятельно.
+    # Если в корзине есть хоть один пак — промокод не отправляем вообще,
+    # чтобы не запутать сайт конфликтующими скидками.
+    has_pack_in_cart = any(packs.is_pack_id(item_id) for item_id in items_list)
+    promo_code = None if has_pack_in_cart else "TELEGRAM10"
+
     response = create_order(
         telegram_id=user_id,
         items=items_list,
-        promotions="TELEGRAM10",
+        promotions=promo_code,
     )
 
     if response.get("status") == "error" or not response.get("checkout_url"):

@@ -15,20 +15,43 @@ integrations.py — связь бота с сайтом mashinabodystore.ru.
 import requests
 import logging
 import os
+import uuid
 
 logger = logging.getLogger("integrations")
 
-# ЖДЁМ ОТ ФЁДОРА: подтверждение финального URL (в его сообщении помечено
-# "может поменяться").
+# Подтверждено Фёдором в wp_endpoints_api.pdf — этот URL актуален.
 SITE_ORDER_ENDPOINT = os.environ.get(
     "SITE_ORDER_ENDPOINT",
     "https://mashinabodystore.ru/wp-json/v2/integrations/musculata",
 )
 
-# ЖДЁМ ОТ ФЁДОРА: "предоставлю когда будет готова интеграция".
+# Каталог товаров — отдаётся постранично (50 на страницу), кэшируется
+# у Фёдора на 5 минут. См. fetch_catalog.py — отдельный скрипт для
+# первоначальной выгрузки и последующих обновлений каталога.
+SITE_PRODUCTS_ENDPOINT = os.environ.get(
+    "SITE_PRODUCTS_ENDPOINT",
+    "https://mashinabodystore.ru/wp-json/v2/integrations/musculata/products",
+)
+
 X_BOT_TOKEN = os.environ.get("X_BOT_TOKEN", "")
 
 REQUEST_TIMEOUT_SECONDS = 10
+
+# Промокоды, которые сайт реально принимает для ОБЫЧНОГО заказа
+# (не присяги) — из wp_endpoints_api.pdf. REF20 сюда не входит —
+# он только для присяги, через отдельный эндпоинт.
+ALLOWED_ORDER_PROMOTIONS = {"TELEGRAM10", "PROMO_10", "PROMO_15", "FREE_SHIPPING"}
+
+
+def _new_request_id(prefix: str) -> str:
+    """
+    Уникальный ID запроса для идемпотентности — Фёдор подтвердил: если
+    прислать повторно тот же request_id, сайт вернёт уже созданный заказ
+    вместо дубликата. Критично на случай сетевых сбоев/ретраев с нашей
+    стороны — без этого повторная попытка после таймаута могла бы
+    создать два заказа на один и тот же товар.
+    """
+    return f"{prefix}-{uuid.uuid4().hex[:20]}"
 
 
 def create_order(telegram_id: int, items: list[int], promotions: str | None = None) -> dict:
@@ -37,12 +60,13 @@ def create_order(telegram_id: int, items: list[int], promotions: str | None = No
 
     Args:
         telegram_id: ID пользователя в Telegram.
-        items: список ID товаров в корзине.
-            ЖДЁМ ОТ ФЁДОРА: подтверждение формата (сейчас предполагаем
-            int; может оказаться, что нужны строковые ID из МойСклада —
-            тогда меняется только тип здесь и в products.py, сам вызов
-            не меняется).
-        promotions: код промокода, например "TELEGRAM10". Необязателен.
+        items: список реальных WooCommerce ID товаров в корзине (в том
+            числе паков — по подтверждению Фёдора, пак передаётся как
+            обычный товар с реальным ID, отдельного bundle_id не нужно).
+        promotions: код промокода — должен входить в ALLOWED_ORDER_PROMOTIONS.
+            НЕ передавать вместе с паком в корзине — по документации сайта
+            обычный купон дополнительно к паку не применяется (скидка
+            на пак считается отдельно самим сайтом).
 
     Returns:
         dict с ключами status, order_id, checkout_url, missing_items_reported.
@@ -53,8 +77,18 @@ def create_order(telegram_id: int, items: list[int], promotions: str | None = No
         logger.error("X_BOT_TOKEN не задан — интеграция ещё не настроена Фёдором")
         return _error_response()
 
-    payload = {"telegram_id": telegram_id, "items": items}
+    payload = {
+        "telegram_id": telegram_id,
+        "items": items,
+        "request_id": _new_request_id("order"),
+    }
     if promotions:
+        if promotions not in ALLOWED_ORDER_PROMOTIONS:
+            logger.warning(
+                "Промокод %r не входит в список разрешённых сайтом (%s) — отправляю как есть, "
+                "сайт сам решит, но стоит проверить логику вызова",
+                promotions, ALLOWED_ORDER_PROMOTIONS,
+            )
         payload["promotions"] = promotions
 
     headers = {
@@ -69,8 +103,8 @@ def create_order(telegram_id: int, items: list[int], promotions: str | None = No
         response.raise_for_status()
         data = response.json()
         logger.info(
-            "Заказ создан: telegram_id=%s order_id=%s missing_items=%s",
-            telegram_id, data.get("order_id"), data.get("missing_items_reported"),
+            "Заказ создан: telegram_id=%s order_id=%s missing_items=%s request_id=%s",
+            telegram_id, data.get("order_id"), data.get("missing_items_reported"), payload["request_id"],
         )
         return data
     except requests.exceptions.RequestException as e:
