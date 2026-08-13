@@ -38,8 +38,8 @@ X_BOT_TOKEN = os.environ.get("X_BOT_TOKEN", "")
 REQUEST_TIMEOUT_SECONDS = 10
 
 # Промокоды, которые сайт реально принимает для ОБЫЧНОГО заказа
-# (не присяги) — из wp_endpoints_api.pdf. REF20 сюда не входит —
-# он только для присяги, через отдельный эндпоинт.
+# (не членства) — из wp_endpoints_api.pdf. REF20 сюда не входит —
+# он только для членства, через отдельный эндпоинт.
 ALLOWED_ORDER_PROMOTIONS = {"TELEGRAM10", "PROMO_10", "PROMO_15", "FREE_SHIPPING"}
 
 
@@ -126,7 +126,7 @@ def _error_response() -> dict:
 
 
 # ЖДЁМ ОТ ФЁДОРА: отдельный (или тот же самый?) эндпоинт для оплаты
-# присяги Ордену — этого ещё нет в согласованной схеме, см. список
+# членства в Сообществе — этого ещё нет в согласованной схеме, см. список
 # вопросов. Пока используем ту же переменную, что и обычный заказ, как
 # временную заглушку, чтобы код не падал — как только он даст точный
 # адрес, здесь меняется одна строка.
@@ -135,11 +135,11 @@ SITE_SUBSCRIPTION_ENDPOINT = os.environ.get("SITE_SUBSCRIPTION_ENDPOINT", "")
 
 def create_subscription_order(telegram_id: int, tier_id: int, promotions: str | None = None) -> dict:
     """
-    Запрос на принесение годовой присяги Ордену на конкретный уровень
+    Запрос на годовое членство в Сообществе на конкретный уровень
     (Оруженосец / Рыцарь / Военачальник — см. subscription_tiers.py).
 
     promotions — промокод, если есть. Сейчас используется REF20 (скидка 20%
-    приглашённому на первую годовую присягу, по Excel заказчика).
+    приглашённому на первое годовое членство, по Excel заказчика).
 
     ⚠️ SITE_SUBSCRIPTION_ENDPOINT ещё не согласован с Фёдором — пока
     переменная пустая, функция сразу возвращает error, и handle_tier_subscribe
@@ -147,7 +147,7 @@ def create_subscription_order(telegram_id: int, tier_id: int, promotions: str | 
     падения или зависания.
     """
     if not SITE_SUBSCRIPTION_ENDPOINT or not X_BOT_TOKEN:
-        logger.error("Принесение присяги недоступно: эндпоинт или токен ещё не настроены Фёдором")
+        logger.error("Оформление членства недоступно: эндпоинт или токен ещё не настроены Фёдором")
         return _error_response()
 
     payload = {
@@ -166,12 +166,12 @@ def create_subscription_order(telegram_id: int, tier_id: int, promotions: str | 
         )
         response.raise_for_status()
         data = response.json()
-        logger.info("Запрос на присягу создан: telegram_id=%s tier_id=%s order_id=%s",
+        logger.info("Запрос на членство создан: telegram_id=%s tier_id=%s order_id=%s",
                      telegram_id, tier_id, data.get("order_id"))
         return data
     except requests.exceptions.RequestException as e:
-        logger.error("Ошибка при создании присяги для telegram_id=%s: %s", telegram_id, e)
+        logger.error("Ошибка при создании членства для telegram_id=%s: %s", telegram_id, e)
         return _error_response()
     except ValueError as e:
-        logger.error("Сайт вернул невалидный JSON для присяги telegram_id=%s: %s", telegram_id, e)
+        logger.error("Сайт вернул невалидный JSON для членства telegram_id=%s: %s", telegram_id, e)
         return _error_response()

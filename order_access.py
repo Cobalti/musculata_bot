@@ -1,6 +1,6 @@
 """
 order_access.py — автоматическая выдача и отзыв доступа в закрытый
-канал и чат Ордена по статусу присяги.
+канал и чат Сообщества по статусу членства.
 
 ЕДИНАЯ ТОЧКА ПРАВДЫ: subscriptions_db.has_active_subscription() уже
 учитывает и срок действия, и заморозку — сюда её логику не дублируем.
@@ -11,7 +11,7 @@ order_access.py — автоматическая выдача и отзыв до
 просрочен или заморожен.
 
 ТРЕБОВАНИЯ К БОТУ В TELEGRAM (настраивается руками, не кодом):
-Бот должен быть администратором и в канале, и в чате Ордена, с правами
+Бот должен быть администратором и в канале, и в чате Сообщества, с правами
 минимум "приглашать участников" и "блокировать пользователей" — без
 этого create_chat_invite_link/ban_chat_member/unban_chat_member просто
 вернут ошибку доступа.
@@ -57,7 +57,7 @@ def grant_access(bot, telegram_id: int) -> bool:
     try:
         bot.send_message(
             telegram_id,
-            "🛡 <b>Доступ в Орден открыт!</b>\n\n"
+            "🛡 <b>Доступ в сообщество открыт!</b>\n\n"
             f"Канал: {channel_link}\n"
             f"Общий чат: {chat_link}\n\n"
             "Ссылки одноразовые — переходи по ним сам, поделиться с кем-то не получится.",
@@ -68,7 +68,7 @@ def grant_access(bot, telegram_id: int) -> bool:
         return False
 
     subscriptions_db.set_access_granted(telegram_id, True)
-    logger.info("Доступ в канал/чат Ордена выдан: telegram_id=%s", telegram_id)
+    logger.info("Доступ в канал/чат Сообщества выдан: telegram_id=%s", telegram_id)
     return True
 
 
@@ -76,7 +76,7 @@ def revoke_access(bot, telegram_id: int) -> bool:
     """
     Убирает пользователя из канала и чата — ban_chat_member сразу же
     unban_chat_member (only_if_banned=True), чтобы это было именно
-    "исключить сейчас", а не перманентный бан: если присяга потом
+    "исключить сейчас", а не перманентный бан: если членство потом
     возобновится, пользователь сможет зайти по новой ссылке.
 
     Не страшно, если пользователя там уже не было (например, сам вышел
@@ -98,13 +98,13 @@ def revoke_access(bot, telegram_id: int) -> bool:
             )
 
     subscriptions_db.set_access_granted(telegram_id, False)
-    logger.info("Доступ в канал/чат Ордена отозван: telegram_id=%s", telegram_id)
+    logger.info("Доступ в канал/чат Сообщества отозван: telegram_id=%s", telegram_id)
     return True
 
 
 def reconcile_access(bot) -> None:
     """
-    Сверяет всех присягнувших с реальным статусом доступа и приводит
+    Сверяет всех участников сообщества с реальным статусом доступа и приводит
     Telegram в соответствие. Вызывается периодически (см. run.py) —
     покрывает все три случая разом: свежую активацию, истечение срока,
     заморозку и разморозку.
@@ -116,7 +116,7 @@ def reconcile_access(bot) -> None:
     if not mismatches:
         return
 
-    logger.info("Сверка доступа в Орден: %s расхождений", len(mismatches))
+    logger.info("Сверка доступа в Сообщество: %s расхождений", len(mismatches))
     for item in mismatches:
         telegram_id = item["telegram_id"]
         try:

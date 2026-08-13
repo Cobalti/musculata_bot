@@ -30,9 +30,9 @@ logger = logging.getLogger("run")
 def start_order_access_reconciliation(interval_seconds: int = 900):
     """
     Раз в interval_seconds (по умолчанию 15 минут) сверяет всех
-    присягнувших с реальным доступом в канал/чат Ордена — выдаёт,
+    участников сообщества с реальным доступом в канал/чат Сообщества — выдаёт,
     где не хватает (например, разморозка), забирает, где просрочено
-    или заморожено. Активация присяги выдаёт доступ сразу же отдельно
+    или приостановлено. Активация членства выдаёт доступ сразу же отдельно
     (см. webhooks.py) — эта фоновая сверка подстраховывает на случай,
     если тот прямой вызов не сработал, плюс единственная точка, которая
     вообще обрабатывает истечение срока и заморозку/разморозку.
@@ -43,11 +43,11 @@ def start_order_access_reconciliation(interval_seconds: int = 900):
             try:
                 order_access.reconcile_access(bot_main.bot)
             except Exception:
-                logger.exception("Ошибка в фоновой сверке доступа Ордена")
+                logger.exception("Ошибка в фоновой сверке доступа Сообщества")
 
     thread = threading.Thread(target=_loop, daemon=True)
     thread.start()
-    logger.info("Фоновая сверка доступа Ордена запущена (каждые %s сек.)", interval_seconds)
+    logger.info("Фоновая сверка доступа Сообщества запущена (каждые %s сек.)", interval_seconds)
 
 
 def start_bot_polling():

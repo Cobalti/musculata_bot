@@ -16,7 +16,7 @@ from legal import CONSENT_TEXT
 from notifier import notify_admin
 from errors import safe_handler
 from checkout import price_breakdown
-from integrations import create_order, create_subscription_order
+from integrations import create_order
 import orders_db
 import subscriptions_db
 import subscription_tiers
@@ -24,6 +24,8 @@ import referrals_db
 import consent_db
 import health_check
 import pack4_db
+import payments
+import order_access
 import emoji_ui
 import emoji_ids
 import packs
@@ -181,7 +183,7 @@ def _handle_referral_start_param(message):
             referrer_id,
             f"{_sword} <b>По твоей ссылке пришёл новый соратник!</b>\n\n"
             f"Он получит скидку {referrals_db.INVITEE_DISCOUNT_PERCENT}% на первую "
-            f"присягу. Как только он вступит в Орден — это засчитается тебе.",
+            f"оплату вступления в сообщество. Как только он вступит — это засчитается тебе.",
             parse_mode="HTML",
         )
     except Exception:
@@ -193,7 +195,7 @@ def _handle_referral_start_param(message):
 @bot.message_handler(commands=["start"])
 @safe_handler(bot, require_consent=False)
 def start_message(message):
-    # /start в общем чате/канале Ордена (где бот теперь администратор,
+    # /start в общем чате/канале Сообщества (где бот теперь администратор,
     # см. order_access.py) не должен запускать личный сценарий согласия
     # на ОПД и открытия меню — это всё имеет смысл только в личном диалоге.
     if getattr(message.chat, "type", "private") != "private":
@@ -319,7 +321,7 @@ def handle_catlist(call):
 # ---------- Военные Сундуки (паки) — в каталоге ----------
 # Готовые наборы товаров со скидкой 15% против розницы. Живут в каталоге,
 # подписка для покупки НЕ нужна — её может купить кто угодно. Присягнувшим
-# Ордену полагается дополнительная скидка 5/10/15% в зависимости от уровня
+# участникам сообщества полагается дополнительная скидка 5/10/15% в зависимости от уровня
 # (см. subscription_tiers.pack_discount_for).
 
 
@@ -340,12 +342,12 @@ def _pack_intro_text(tier_id) -> str:
     if discount:
         tier = subscription_tiers.get_tier(tier_id)
         lines.append(
-            f"\n{_diamond} <b>Твоя присяга «{tier['name']}» даёт ещё "
+            f"\n{_diamond} <b>Твоё членство «{tier['name']}» даёт ещё "
             f"−{int(discount * 100)}%</b> — цены ниже уже с учётом этого."
         )
     else:
         lines.append(
-            f"\n{_shield} <i>Подписчики Ордена получают на сундуки "
+            f"\n{_shield} <i>Участники сообщества получают на сундуки "
             f"дополнительную скидку до 15%.</i>"
         )
 
@@ -379,7 +381,7 @@ def handle_packs_list(call):
 
 
 def _pack_detail_text(pack: dict, tier_id) -> str:
-    """Карточка сундука: состав, розница, цена, экономия, скидка присяги."""
+    """Карточка сундука: состав, розница, цена, экономия, скидка за членство в сообществе."""
     _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
     _sword = f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji>'
     _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
@@ -407,7 +409,7 @@ def _pack_detail_text(pack: dict, tier_id) -> str:
         total_pct = packs.total_discount_percent(tier_id)
         lines += [
             f"{_diamond} <b>Твоя цена: {final_price} ₽</b> "
-            f"<i>(−{total_pct}% — базовая скидка 15% + присяга «{tier['name']}»)</i>",
+            f"<i>(−{total_pct}% — базовая скидка 15% + членство «{tier['name']}»)</i>",
             f"Экономия: <b>{pack['retail_total'] - final_price} ₽</b>",
         ]
     else:
@@ -415,7 +417,7 @@ def _pack_detail_text(pack: dict, tier_id) -> str:
             f"{_diamond} <b>Цена сундука: {final_price} ₽</b>",
             f"Экономия: <b>{pack['retail_total'] - final_price} ₽</b> (−{packs.total_discount_percent(None)}%)",
             "",
-            f"{_shield} <i>Принеся присягу Ордену, этот сундук стоил бы "
+            f"{_shield} <i>Вступив в сообщество, этот сундук стоил бы "
             f"от {packs.price_for(pack['id'], subscription_tiers.TIERS[0]['id'])} ₽.</i>",
         ]
 
@@ -449,7 +451,7 @@ def handle_pack_detail(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("pack_add:"))
 @safe_handler(bot)
 def handle_pack_add(call):
-    """Кладёт сундук в корзину — доступно всем, присяга не требуется."""
+    """Кладёт сундук в корзину — доступно всем, членство в сообществе не требуется."""
     pack_id = int(call.data.split(":")[1])
     pack = packs.get_pack(pack_id)
     if not pack:
@@ -637,7 +639,7 @@ def handle_checkout(call):
     # заказ — поэтому здесь всегда стандартный промокод бота. НО: по
     # документации сайта (wp_endpoints_api.pdf) обычный купон
     # ДОПОЛНИТЕЛЬНО К ПАКУ НЕ ПРИМЕНЯЕТСЯ — скидка на пак (15% база +
-    # скидка уровня присяги) считается сайтом отдельно и самостоятельно.
+    # скидка уровня членства) считается сайтом отдельно и самостоятельно.
     # Если в корзине есть хоть один пак — промокод не отправляем вообще,
     # чтобы не запутать сайт конфликтующими скидками.
     has_pack_in_cart = any(packs.is_pack_id(item_id) for item_id in items_list)
@@ -720,7 +722,7 @@ def handle_checkout(call):
 
 # ---------- Пригласить соратника (реферальная система) ----------
 # Правила из Excel заказчика: приглашённый получает скидку 20% на первую
-# годовую присягу; у пригласившего есть ступени 1 / 3 / 6 приглашённых.
+# годовое вступление в сообщество; у пригласившего есть ступени 1 / 3 / 6 приглашённых.
 # ⚠️ Что именно даётся пригласившему на каждой ступени — в Excel НЕ указано
 # (колонка пустая), поэтому здесь показываем только прогресс. Как только
 # заказчик определится — вписать в referrals_db.MILESTONE_REWARDS.
@@ -752,13 +754,13 @@ def handle_invite(message):
         f"{_sword} <b>Пригласить соратника</b>\n",
         f"{_scroll} Отправь другу свою ссылку. Он получит "
         f"<b>скидку {referrals_db.INVITEE_DISCOUNT_PERCENT}%</b> на первую "
-        f"годовую присягу Ордену.",
+        f"годовое вступление в сообщество.",
         "",
         f"{_sword} <b>Твоя ссылка:</b>",
         f"<code>{link}</code>",
         "",
         f"{_diamond} <b>Твои соратники:</b>",
-        f"{_shield} Вступили в Орден: <b>{converted}</b>",
+        f"{_shield} Вступили в сообщество: <b>{converted}</b>",
     ]
     if pending:
         lines.append(f"{_scroll} Перешли, но ещё не вступили: {pending}")
@@ -819,10 +821,10 @@ def handle_orders(message):
     show_content(message.chat.id, user_id, "\n".join(lines), parse_mode="HTML")
 
 
-# ---------- Орден: уровни присяги ----------
+# ---------- Сообщество: уровни членства ----------
 # Три уровня из Excel заказчика: Оруженосец / Рыцарь / Военачальник.
 # Годовая оплата, оплата идёт на сайте (не через корзину).
-# Паки сюда НЕ входят — они в каталоге; присяга лишь даёт на них скидку.
+# Паки сюда НЕ входят — они в каталоге; членство в сообществе лишь даёт на них скидку.
 
 
 def _order_menu_text(sub: dict | None, has_sub: bool) -> str:
@@ -831,18 +833,18 @@ def _order_menu_text(sub: dict | None, has_sub: bool) -> str:
     _sword = f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji>'
     _scroll = f'<tg-emoji emoji-id="{emoji_ids.SCROLL}">📜</tg-emoji>'
 
-    lines = [f"{_shield} <b>Орден</b>\n"]
+    lines = [f"{_shield} <b>Сообщество</b>\n"]
 
     if has_sub and sub:
         expires = _format_date(sub.get("expires_at"))
         lines.append(
-            f"{_diamond} <b>Ты в Ордене — уровень «{sub.get('tier_name')}»</b>"
+            f"{_diamond} <b>Ты в сообществе — уровень «{sub.get('tier_name')}»</b>"
             + (f", до {expires}" if expires else "")
         )
         lines.append("")
 
     lines += [
-        f"{_sword} Годовое членство в Ордене. Что даёт любой уровень:",
+        f"{_sword} Годовое членство в сообществе. Что даёт любой уровень:",
         "",
     ]
     for perk in subscription_tiers.COMMON_PERKS:
@@ -869,7 +871,7 @@ def _format_date(iso_str) -> str | None:
 
 
 def _show_order_menu(chat_id: int, user_id: int, message_id: int | None = None):
-    """Показ экрана Ордена. Из reply-кнопки — новое сообщение, из inline — правка."""
+    """Показ экрана Сообщества. Из reply-кнопки — новое сообщение, из inline — правка."""
     sub = subscriptions_db.get_subscription(user_id)
     has_sub = subscriptions_db.has_active_subscription(user_id)
     text = _order_menu_text(sub, has_sub)
@@ -949,7 +951,7 @@ def _tier_detail_text(tier: dict, is_current: bool, invitee_discount: bool) -> s
     if invitee_discount and not is_current:
         lines += [
             "",
-            f"{_diamond} <b>Тебя пригласил соратник — на первую присягу "
+            f"{_diamond} <b>Тебя пригласил соратник — на первое вступление в сообщество "
             f"действует скидка {referrals_db.INVITEE_DISCOUNT_PERCENT}%!</b>",
         ]
 
@@ -984,8 +986,10 @@ def handle_tier_detail(call):
 @safe_handler(bot)
 def handle_tier_subscribe(call):
     """
-    Принесение присяги на выбранный уровень. Оплата идёт на сайте —
-    в корзину присяга не кладётся.
+    Вступление в сообщество на выбранный уровень. Решение от созвона
+    13.08: оплата идёт ПРЯМО В TELEGRAM через ЮKassa (send_invoice),
+    а не через сайт — в корзину членство не кладётся и checkout_url
+    сайта здесь больше не участвует.
     """
     tier_id = int(call.data.split(":")[1])
     tier = subscription_tiers.get_tier(tier_id)
@@ -995,56 +999,149 @@ def handle_tier_subscribe(call):
 
     user_id = call.from_user.id
     if subscriptions_db.has_active_subscription(user_id):
-        bot.answer_callback_query(call.id, "Ты уже в Ордене")
+        bot.answer_callback_query(call.id, "Ты уже в сообществе")
+        return
+
+    if not payments.is_configured():
+        bot.answer_callback_query(call.id, "Пока недоступно")
+        _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
+        show_content(
+            call.message.chat.id, user_id,
+            f"{_shield} <b>Вступление в сообщество временно недоступно.</b>\n\n"
+            "Приём платежей ещё настраивается (ждём токен ЮKassa). "
+            "Загляни позже или напиши в поддержку.",
+            parse_mode="HTML",
+        )
         return
 
     bot.answer_callback_query(call.id)
 
-    # Запоминаем выбор ДО ухода на оплату — на случай, если сайт не вернёт
-    # tier_id обратно в вебхуке (см. subscriptions_db.record_pending_subscription).
+    # Запоминаем выбор — та же логика, что и раньше: если что-то пойдёт не
+    # так между выставлением счёта и оплатой, у нас есть след, какой
+    # уровень выбирал пользователь.
     subscriptions_db.record_pending_subscription(user_id, tier_id)
 
-    # Скидка 20% приглашённому на первую годовую присягу (из Excel).
-    promo = "REF20" if referrals_db.has_pending_invitee_discount(user_id) else None
-    response = create_subscription_order(telegram_id=user_id, tier_id=tier_id, promotions=promo)
+    # Скидка 20% приглашённому на первое годовое членство (из Excel).
+    discount = referrals_db.INVITEE_DISCOUNT_PERCENT if referrals_db.has_pending_invitee_discount(user_id) else 0
 
-    if response.get("status") == "error" or not response.get("checkout_url"):
-        analytics.log_event(user_id, call.from_user.username, "subscription_failed", tier["name"])
+    sent = payments.send_membership_invoice(
+        bot, call.message.chat.id, user_id, tier, discount_percent=discount,
+    )
+    if not sent:
+        analytics.log_event(user_id, call.from_user.username, "membership_invoice_failed", tier["name"])
         _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
         show_content(
             call.message.chat.id, user_id,
-            f"{_shield} <b>Принесение присяги временно недоступно.</b>\n\n"
-            "Приём платежей ещё настраивается. Загляни позже "
-            "или напиши в поддержку.",
+            f"{_shield} <b>Не получилось выставить счёт.</b>\n\n"
+            "Попробуй ещё раз чуть позже или напиши в поддержку.",
             parse_mode="HTML",
         )
-        # Колбэк уже подтверждён выше (до create_subscription_order) —
-        # повторно отвечать на тот же callback_query нельзя.
         return
 
-    analytics.log_event(user_id, call.from_user.username, "subscription_checkout", tier["name"])
+    analytics.log_event(user_id, call.from_user.username, "membership_invoice_sent", tier["name"])
+
+
+@bot.pre_checkout_query_handler(func=lambda query: True)
+def handle_pre_checkout_query(pre_checkout_query):
+    """
+    Telegram спрашивает "точно ли можно провести оплату" ПЕРЕД тем, как
+    показать пользователю ввод карты — по правилам Telegram Payments
+    ОБЯЗАТЕЛЬНО ответить в течение 10 секунд, иначе Telegram сам отменит
+    операцию. Пока просто подтверждаем всегда — более сложная проверка
+    (например, что счёт ещё актуален) может понадобиться позже.
+    """
+    try:
+        bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
+    except Exception:
+        logger.exception("Не удалось ответить на pre_checkout_query")
+
+
+@bot.message_handler(content_types=["successful_payment"])
+@safe_handler(bot, require_consent=False)
+def handle_successful_payment(message):
+    """
+    Оплата членства прошла — Telegram прислал обычное сообщение с полем
+    successful_payment. Тут наконец активируем членство (раньше это
+    делал вебхук с сайта, теперь оплата у нас, поэтому и активация тут).
+    """
+    payload = message.successful_payment.invoice_payload
+    parsed = payments.parse_membership_payload(payload)
+    if not parsed:
+        logger.error("Не удалось разобрать payload успешного платежа: %r", payload)
+        return
+
+    telegram_id, tier_id = parsed
+    subscriptions_db.record_pending_subscription(telegram_id, tier_id)
+    subscriptions_db.activate_subscription(telegram_id, tier_id=tier_id)
+    analytics.log_event(telegram_id, message.from_user.username, "membership_paid", str(tier_id))
+
+    tier = subscription_tiers.get_tier(tier_id)
+    tier_name = tier["name"] if tier else "Сообщество"
+
     _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
-    price = f"{tier['price_year']:,}".replace(",", " ")
-    discount_line = (
-        f"\n{_diamond} Скидка {referrals_db.INVITEE_DISCOUNT_PERCENT}% за приглашение "
-        f"будет применена на странице оплаты.\n"
-        if promo else ""
+    bot.send_message(
+        message.chat.id,
+        f"{_diamond} <b>Добро пожаловать в сообщество!</b>\n\n"
+        f"Уровень «{tier_name}» активирован. Загляни в раздел «Сообщество», "
+        f"чтобы посмотреть детали.",
+        parse_mode="HTML",
     )
+
+    # Доступ в канал/чат — сразу, не дожидаясь фоновой сверки (см. run.py).
+    order_access.grant_access(bot, telegram_id)
+
+    # Реферальная конверсия. ВАЖНО: не переиспользуем webhooks._handle_
+    # referral_conversion напрямую — тот модуль рассчитан на отдельный
+    # процесс gunicorn/wsgi.py со своим лёгким notifier_bot (см. wsgi.py,
+    # там объяснено, почему). Этот обработчик живёт в основном
+    # процессе поллинга — используем свой bot и дублируем небольшую
+    # логику уведомления, вместо того чтобы тянуть кросс-процессный
+    # импорт, который не будет работать корректно.
+    _notify_referral_conversion(telegram_id)
+
+
+def _notify_referral_conversion(telegram_id: int):
+    """
+    Засчитывает реферальную конверсию и уведомляет пригласившего — аналог
+    _handle_referral_conversion из webhooks.py, но использует основной
+    bot (polling), не тот, что в вебхуках (см. комментарий выше).
+    """
+    result = referrals_db.mark_converted(telegram_id)
+    if not result:
+        return
+
+    _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
+    _sword = f'<tg-emoji emoji-id="{emoji_ids.SWORD}">⚔️</tg-emoji>'
+
+    referrer_id = result["referrer_id"]
+    count = result["converted_count"]
+
     text = (
-        f"{_diamond} <b>Вступление в Орден — «{tier['name']}»</b>\n\n"
-        f"{price} ₽ за год членства.{discount_line}\n"
-        "Нажми кнопку ниже, чтобы завершить оплату на сайте. "
-        "Доступ откроется автоматически сразу после оплаты."
+        f"{_sword} <b>Твой соратник вступил в сообщество!</b>\n\n"
+        f"Всего по твоим приглашениям вступили: <b>{count}</b>."
     )
-    kb = emoji_ui.build_emoji_keyboard([[
-        emoji_ui.build_emoji_button(
-            "Перейти к оплате", url=response["checkout_url"],
-            style="success", icon_custom_emoji_id=emoji_ids.DIAMOND,
-        )
-    ]])
-    result = emoji_ui.send_message_with_emoji(call.message.chat.id, text, reply_markup=kb)
-    if result.get("ok"):
-        state.set_content(user_id, result["result"]["message_id"])
+    if result["milestone_reached"]:
+        reward = result["reward"] or {}
+        extra_days = reward.get("extra_days", 0)
+        merch_gift = reward.get("merch_gift")
+        text += f"\n\n{_diamond} <b>Ты достиг ступени {result['milestone_reached']}!</b>"
+        if extra_days:
+            new_expires = subscriptions_db.extend_subscription(referrer_id, extra_days)
+            if new_expires:
+                months = extra_days // 30
+                text += f"\nЧленство продлено на {months} мес. — теперь действует до {new_expires[:10]}."
+        if merch_gift:
+            text += f"\n🎁 Тебе полагается: {merch_gift} — свяжемся с тобой отдельно."
+
+    try:
+        bot.send_message(referrer_id, text, parse_mode="HTML")
+    except Exception:
+        logger.warning("Не удалось уведомить пригласившего telegram_id=%s о конверсии", referrer_id)
+
+    logger.info(
+        "Реферал конвертирован (оплата через Telegram Payments): invitee=%s referrer=%s всего=%s",
+        telegram_id, referrer_id, count,
+    )
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("tier_switch:"))
@@ -1066,14 +1163,14 @@ def handle_tier_switch(call):
 @bot.callback_query_handler(func=lambda c: c.data == "my_subscription")
 @safe_handler(bot)
 def handle_my_subscription(call):
-    """Экран текущей присяги — что активна, до какой даты, что даёт."""
+    """Экран текущего членства — что активно, до какой даты, что даёт."""
     user_id = call.from_user.id
     sub = subscriptions_db.get_subscription(user_id)
 
     # ВАЖНО: has_active_subscription() возвращает False и во время
     # заморозки (доступ приостановлен по задумке) — но экран "Моя
-    # присяга" должен показываться и в этом случае, просто со статусом
-    # "на паузе", а не говорить пользователю, что присяги нет вообще.
+    # членство" должен показываться и в этом случае, просто со статусом
+    # "на паузе", а не говорить пользователю, что членства нет вообще.
     # Поэтому здесь проверяем именно срок действия, а не has_active_subscription.
     expires_at = None
     if sub and sub.get("expires_at"):
@@ -1084,7 +1181,7 @@ def handle_my_subscription(call):
             expires_at = None
 
     if not sub or not expires_at or expires_at <= datetime.now(expires_at.tzinfo):
-        bot.answer_callback_query(call.id, "Активной присяги нет")
+        bot.answer_callback_query(call.id, "Ты пока не в сообществе")
         return
 
     bot.answer_callback_query(call.id)
@@ -1099,7 +1196,7 @@ def handle_my_subscription(call):
     expires = _format_date(sub.get("expires_at"))
 
     lines = [
-        f"{_diamond} <b>Твоя присяга</b>\n",
+        f"{_diamond} <b>Твоё членство в сообществе</b>\n",
         f"{_shield} Уровень: <b>{sub.get('tier_name')}</b>",
     ]
 
@@ -1138,7 +1235,7 @@ def handle_freeze_prompt(call):
     """Показывает варианты срока заморозки (7/14/30 дней)."""
     user_id = call.from_user.id
     if not subscriptions_db.has_active_subscription(user_id):
-        bot.answer_callback_query(call.id, "Активной присяги нет")
+        bot.answer_callback_query(call.id, "Ты пока не в сообществе")
         return
     if subscriptions_db.is_frozen(user_id):
         bot.answer_callback_query(call.id, "Присяга уже на паузе")
@@ -1148,9 +1245,9 @@ def handle_freeze_prompt(call):
     _drop = f'<tg-emoji emoji-id="{emoji_ids.DROP}">💧</tg-emoji>'
     edit_or_resend(
         call.message.chat.id, user_id, call.message.message_id,
-        f"{_drop} <b>На сколько дней заморозить присягу?</b>\n\n"
+        f"{_drop} <b>На сколько дней приостановить участие в сообществе?</b>\n\n"
         "Доступ будет приостановлен на выбранный срок, а дата окончания "
-        "присяги сдвинется на столько же дней вперёд — оплаченное время "
+        "членства сдвинется на столько же дней вперёд — оплаченное время "
         "не потеряется. Максимум 30 дней.",
         reply_markup=keyboards.freeze_options_keyboard_dict(),
     )
@@ -1159,7 +1256,7 @@ def handle_freeze_prompt(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("freeze_do:"))
 @safe_handler(bot)
 def handle_freeze_do(call):
-    """Реально замораживает присягу на выбранный срок."""
+    """Реально приостанавливает участие в сообществе на выбранный срок."""
     days = int(call.data.split(":")[1])
     user_id = call.from_user.id
 
@@ -1169,7 +1266,7 @@ def handle_freeze_do(call):
         reason = result.get("reason")
         messages = {
             "invalid_days": "Некорректный срок",
-            "no_subscription": "Активной присяги нет",
+            "no_subscription": "Ты пока не в сообществе",
             "already_frozen": "Присяга уже на паузе",
         }
         bot.answer_callback_query(call.id, messages.get(reason, "Не получилось"))
@@ -1184,13 +1281,13 @@ def handle_freeze_do(call):
     edit_or_resend(
         call.message.chat.id, user_id, call.message.message_id,
         f"{_drop} <b>Присяга заморожена на {days} дней.</b>\n\n"
-        f"Доступ приостановлен до {frozen_until}, дата окончания присяги "
+        f"Доступ приостановлен до {frozen_until}, дата окончания членства "
         f"сдвинута на {new_expires}.",
         reply_markup=keyboards.my_subscription_keyboard_dict(is_frozen=True),
     )
 
 
-# ---------- Пак №4: бесплатный ежемесячный набор для присягнувших ----------
+# ---------- Пак №4: бесплатный ежемесячный набор для участников сообщества ----------
 # Из ТЗ по подпискам: "уникальный, отдельно не продаётся, состав меняется
 # каждый месяц". Бот НЕ занимается физической отправкой — только честно
 # фиксирует, кто имеет право и кто уже забрал в этом месяце, и уведомляет
@@ -1205,12 +1302,12 @@ def _pack4_text(comp: dict | None, already_claimed: bool) -> str:
 
     if not comp:
         return (
-            f"{_shield} <b>Пак №4 — бесплатный подарок присягнувшим</b>\n\n"
+            f"{_shield} <b>Пак №4 — бесплатный подарок участникам сообщества</b>\n\n"
             f"{_scroll} Состав этого месяца ещё не объявлен — загляни чуть позже."
         )
 
     lines = [
-        f"{_shield} <b>Пак №4 — бесплатный подарок присягнувшим</b>\n",
+        f"{_shield} <b>Пак №4 — бесплатный подарок участникам сообщества</b>\n",
         f"{_scroll} <b>Состав этого месяца:</b>",
     ]
     for item in comp["items"]:
@@ -1228,10 +1325,10 @@ def _pack4_text(comp: dict | None, already_claimed: bool) -> str:
 @bot.callback_query_handler(func=lambda c: c.data == "pack4")
 @safe_handler(bot)
 def handle_pack4(call):
-    """Экран пака №4 — доступен только присягнувшим (и не во время заморозки)."""
+    """Экран пака №4 — доступен только участникам сообщества (и не во время паузы)."""
     user_id = call.from_user.id
     if not subscriptions_db.has_active_subscription(user_id):
-        bot.answer_callback_query(call.id, "Нужна присяга Ордену")
+        bot.answer_callback_query(call.id, "Нужно вступить в сообщество")
         return
 
     bot.answer_callback_query(call.id)
@@ -1251,7 +1348,7 @@ def handle_pack4_claim(call):
     """Забрать пак №4 — раз в месяц, без повторов."""
     user_id = call.from_user.id
     if not subscriptions_db.has_active_subscription(user_id):
-        bot.answer_callback_query(call.id, "Нужна присяга Ордену")
+        bot.answer_callback_query(call.id, "Нужно вступить в сообщество")
         return
 
     comp = pack4_db.get_current_composition()

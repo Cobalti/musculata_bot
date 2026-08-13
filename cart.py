@@ -7,7 +7,7 @@
 В корзине могут лежать:
   - обычные товары каталога (products.json);
   - «Военные Сундуки» — паки (packs.py), id из диапазона PACK_ID_OFFSET.
-Подписка Ордена в корзину НЕ кладётся — она оплачивается отдельно
+Членство в сообществе в корзину НЕ кладётся — оно оплачивается отдельно
 на сайте (см. main.py, handle_tier_subscribe).
 
 Цена паков зависит от уровня подписки пользователя (скидка 5/10/15%),
@@ -93,7 +93,7 @@ def cart_text(user_id: int) -> str:
             f"{icon} {item['name']} — {qty} шт. × {item['price']} ₽ = <b>{item['price'] * qty} ₽</b>"
         )
 
-    # Если присяга даёт скидку на паки — честно показываем это в корзине,
+    # Если членство даёт скидку на паки — честно показываем это в корзине,
     # иначе пользователь не поймёт, почему цена сундука ниже, чем в каталоге.
     has_pack = any(packs.is_pack_id(i) for i in cart)
     discount = subscription_tiers.pack_discount_for(tier_id)
@@ -102,7 +102,7 @@ def cart_text(user_id: int) -> str:
         total_pct = packs.total_discount_percent(tier_id)
         lines.append(
             f"\n{_diamond} <i>Скидка {total_pct}% на сундуки (база 15% + "
-            f"присяга «{tier['name']}»)</i>"
+            f"членство «{tier['name']}»)</i>"
         )
 
     lines.append(f"\n{_diamond} <b>Итого: {cart_total(user_id)} ₽</b>")
