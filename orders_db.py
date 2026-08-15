@@ -172,5 +172,35 @@ def get_user_orders(telegram_id: int, limit: int = 10) -> list[dict]:
         return [dict(row) for row in cur.fetchall()]
 
 
+def get_stats() -> dict:
+    """
+    Сводная статистика по заказам — для админ-команды /stats.
+    revenue считается только по статусу 'paid' (total хранится строкой,
+    приводим к числу; если где-то total не удалось распарсить — просто
+    пропускаем эту строку, не роняем всю статистику из-за одной записи).
+    """
+    with _connect() as conn:
+        total = conn.execute("SELECT COUNT(*) AS c FROM orders").fetchone()["c"]
+        paid = conn.execute("SELECT COUNT(*) AS c FROM orders WHERE status = 'paid'").fetchone()["c"]
+        pending = conn.execute("SELECT COUNT(*) AS c FROM orders WHERE status = 'pending'").fetchone()["c"]
+        missing = conn.execute("SELECT COUNT(*) AS c FROM orders WHERE status = 'missing_items'").fetchone()["c"]
+        totals = conn.execute("SELECT total FROM orders WHERE status = 'paid'").fetchall()
+
+    revenue = 0.0
+    for row in totals:
+        try:
+            revenue += float(row["total"])
+        except (TypeError, ValueError):
+            continue
+
+    return {
+        "total": total,
+        "paid": paid,
+        "pending": pending,
+        "missing_items": missing,
+        "revenue": round(revenue),
+    }
+
+
 # Инициализация при импорте модуля — таблица создаётся один раз, если её ещё нет.
 _init_db()

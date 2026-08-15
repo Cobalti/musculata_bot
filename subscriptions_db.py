@@ -387,4 +387,18 @@ def change_tier(telegram_id: int, new_tier_id: int, new_tier_name: str) -> None:
     logger.info("Уровень изменён (без сброса срока): telegram_id=%s новый уровень=%s", telegram_id, new_tier_name)
 
 
+def count_active_members() -> int:
+    """
+    Сколько сейчас платящих участников сообщества — для /stats. Считает
+    ВСЕХ, у кого статус 'active' и срок не истёк, ВКЛЮЧАЯ тех, кто сейчас
+    на паузе (заморожен) — это бизнес-метрика "сколько людей нам платят",
+    а не has_active_subscription (та про доступ прямо сейчас, поэтому
+    для заморозки специально возвращает False — разные задачи, разная логика).
+    """
+    with _connect() as conn:
+        rows = conn.execute("SELECT expires_at FROM subscriptions WHERE status = 'active'").fetchall()
+    now = _now()
+    return sum(1 for row in rows if datetime.fromisoformat(row["expires_at"]) > now)
+
+
 _init_db()

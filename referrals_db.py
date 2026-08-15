@@ -257,4 +257,12 @@ def next_milestone(converted_count: int) -> int | None:
     return None
 
 
+def count_stats() -> dict:
+    """Сводка по рефералам — для /stats. total = все зарегистрированные связи, converted = реально оплатившие."""
+    with _connect() as conn:
+        total = conn.execute("SELECT COUNT(*) AS c FROM referrals").fetchone()["c"]
+        converted = conn.execute("SELECT COUNT(*) AS c FROM referrals WHERE status = 'converted'").fetchone()["c"]
+    return {"total": total, "converted": converted}
+
+
 _init_db()

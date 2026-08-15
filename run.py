@@ -29,6 +29,7 @@ main.py по-прежнему можно запускать напрямую (py
 """
 
 import logging
+import re
 import threading
 import time
 
@@ -55,6 +56,19 @@ def register_telegram_webhook():
             "PUBLIC_WEBHOOK_URL не задан в .env — вебхук Telegram НЕ зарегистрирован, "
             "бот не будет получать сообщения! Впиши https://bot.mashinabodystore.ru "
             "(без слэша на конце) и перезапусти."
+        )
+        return
+
+    # Telegram разрешает в secret_token только A-Z/a-z/0-9/подчёркивание/
+    # дефис — если секрет сгенерирован через "openssl rand -base64"
+    # (а не -hex), там могут оказаться "+", "/", "=", которые Telegram
+    # отклонит с неочевидной ошибкой "unallowed characters". Проверяем
+    # сами и даём понятную подсказку, а не просто падаем с traceback.
+    if TELEGRAM_WEBHOOK_SECRET and not re.fullmatch(r"[A-Za-z0-9_-]+", TELEGRAM_WEBHOOK_SECRET):
+        logger.error(
+            "TELEGRAM_WEBHOOK_SECRET содержит недопустимые символы (Telegram разрешает "
+            "только буквы/цифры/_/- ) — вебхук НЕ зарегистрирован. Перегенерируй командой "
+            "'openssl rand -hex 32' (не -base64) и впиши заново в .env."
         )
         return
 

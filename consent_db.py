@@ -108,4 +108,11 @@ def revoke_consent(telegram_id: int) -> None:
     logger.info("Согласие на ОПД отозвано: telegram_id=%s", telegram_id)
 
 
+def count_users() -> int:
+    """Сколько всего людей когда-либо дали согласие на ОПД — для /stats."""
+    with _connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS c FROM consent").fetchone()
+    return row["c"]
+
+
 _init_db()

@@ -1497,6 +1497,33 @@ def handle_pack4_claim(call):
     )
 
 
+@bot.message_handler(commands=["stats"])
+@safe_handler(bot, require_consent=False)
+def handle_stats(message):
+    """Статистика бота — только для администратора. Свой аналог 'monthly users', который считаем сами."""
+    delete_user_message(message)
+    if not ADMIN_CHAT_ID or message.from_user.id != int(ADMIN_CHAT_ID):
+        return
+
+    total_users = consent_db.count_users()
+    order_stats = orders_db.get_stats()
+    active_members = subscriptions_db.count_active_members()
+    ref_stats = referrals_db.count_stats()
+
+    text = (
+        f"📊 <b>Статистика бота</b>\n\n"
+        f"👥 Всего пользователей (дали согласие): <b>{total_users}</b>\n\n"
+        f"🛒 <b>Заказы:</b>\n"
+        f"  Всего: {order_stats['total']}\n"
+        f"  Оплачено: {order_stats['paid']} (выручка: {order_stats['revenue']} ₽)\n"
+        f"  Ожидает оплаты: {order_stats['pending']}\n"
+        f"  Товар недоступен: {order_stats['missing_items']}\n\n"
+        f"🛡 Активных участников сообщества: <b>{active_members}</b>\n\n"
+        f"⚔️ Реферальных связей: {ref_stats['total']} (из них оплатили присягу: {ref_stats['converted']})"
+    )
+    bot.send_message(message.chat.id, text, parse_mode="HTML")
+
+
 @bot.message_handler(commands=["setpack4"])
 @safe_handler(bot, require_consent=False)
 def handle_setpack4_command(message):
