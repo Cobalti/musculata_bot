@@ -370,4 +370,21 @@ def set_access_granted(telegram_id: int, granted: bool) -> None:
         )
 
 
+def change_tier(telegram_id: int, new_tier_id: int, new_tier_name: str) -> None:
+    """
+    Меняет уровень членства БЕЗ сброса даты окончания — в отличие от
+    activate_subscription (которая всегда ставит started_at/expires_at
+    заново, как для новой подписки). Смена тарифа — это апгрейд/даунгрейд
+    в рамках УЖЕ ОПЛАЧЕННОГО периода, дата окончания остаётся прежней,
+    меняется только сам уровень (и, соответственно, привилегии/скидка
+    на паки на оставшийся срок).
+    """
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE subscriptions SET tier_id = ?, tier_name = ? WHERE telegram_id = ?",
+            (new_tier_id, new_tier_name, telegram_id),
+        )
+    logger.info("Уровень изменён (без сброса срока): telegram_id=%s новый уровень=%s", telegram_id, new_tier_name)
+
+
 _init_db()

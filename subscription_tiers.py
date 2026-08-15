@@ -89,3 +89,15 @@ def pack_discount_for(tier_id: int | None) -> float:
     """Скидка на паки для данного уровня членства. Без членства — 0."""
     tier = TIERS_BY_ID.get(tier_id) if tier_id else None
     return tier["pack_discount"] if tier else 0.0
+
+
+def tier_rank(tier_id: int) -> int:
+    """
+    Позиция уровня в списке TIERS (0 = Оруженосец, 1 = Рыцарь, 2 = Военачальник).
+    Нужна, чтобы понять, апгрейд это или даунгрейд при смене тарифа —
+    список уже идёт по возрастанию престижа/цены, поэтому просто индекс.
+    """
+    for i, t in enumerate(TIERS):
+        if t["id"] == tier_id:
+            return i
+    return -1

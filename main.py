@@ -4,6 +4,7 @@ import logging
 import os
 import telebot
 from telebot import types
+from datetime import datetime, timezone
 
 from config import BOT_TOKEN, ADMIN_CHAT_ID
 from products import PRODUCTS_BY_ID, category_by_index
@@ -1068,11 +1069,36 @@ def handle_pre_checkout_query(pre_checkout_query):
 @safe_handler(bot, require_consent=False)
 def handle_successful_payment(message):
     """
-    Оплата членства прошла — Telegram прислал обычное сообщение с полем
-    successful_payment. Тут наконец активируем членство (раньше это
-    делал вебхук с сайта, теперь оплата у нас, поэтому и активация тут).
+    Оплата прошла — Telegram прислал обычное сообщение с полем
+    successful_payment. Payload (см. payments.py) говорит, что именно
+    оплачено — обычное вступление в сообщество, или доплата за смену
+    тарифа (у них разная логика активации, см. ветки ниже).
     """
     payload = message.successful_payment.invoice_payload
+
+    # Сначала проверяем — это доплата за смену тарифа?
+    switch_parsed = payments.parse_tier_switch_payload(payload)
+    if switch_parsed:
+        telegram_id, new_tier_id = switch_parsed
+        new_tier = subscription_tiers.get_tier(new_tier_id)
+        new_tier_name = new_tier["name"] if new_tier else "Сообщество"
+
+        # ВАЖНО: change_tier, а НЕ activate_subscription — смена тарифа
+        # сохраняет прежнюю дату окончания, не сбрасывает её заново.
+        subscriptions_db.change_tier(telegram_id, new_tier_id, new_tier_name)
+        analytics.log_event(telegram_id, message.from_user.username, "tier_switch_paid", new_tier_name)
+
+        _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
+        bot.send_message(
+            message.chat.id,
+            f"{_diamond} <b>Тариф изменён на «{new_tier_name}»!</b>\n\n"
+            f"Дата окончания членства не поменялась — новые привилегии "
+            f"действуют сразу.",
+            parse_mode="HTML",
+        )
+        return
+
+    # Иначе — обычное вступление (новое членство).
     parsed = payments.parse_membership_payload(payload)
     if not parsed:
         logger.error("Не удалось разобрать payload успешного платежа: %r", payload)
@@ -1156,16 +1182,93 @@ def _notify_referral_conversion(telegram_id: int):
 @safe_handler(bot)
 def handle_tier_switch(call):
     """
-    Смена тарифа заявлена в Excel («в любой момент с пропорциональным
-    перерасчётом»), но механика доплаты/возврата ещё не согласована
-    с сайтом — поэтому пока честно сообщаем, а не делаем вид, что работает.
+    Смена тарифа в рамках уже активного членства.
+
+    АПГРЕЙД (переход на более дорогой уровень) — реализован: доплачиваем
+    разницу пропорционально оставшимся дням, прежний срок действия
+    сохраняется (не сбрасывается, как при новом вступлении).
+
+    ДАУНГРЕЙД (переход на более дешёвый уровень) — пока НЕ автоматизирован:
+    это означало бы частичный возврат денег, а у нас нет ни решённой
+    механики возвратов, ни возможности протестировать реальный возврат
+    через ЮKassa без боевого доступа. Честно отправляем в поддержку,
+    а не делаем вид, что это работает.
     """
-    _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
-    bot.answer_callback_query(
-        call.id,
-        "Смена тарифа пока настраивается — напиши в поддержку, поможем вручную",
-        show_alert=True,
-    )
+    new_tier_id = int(call.data.split(":")[1])
+    new_tier = subscription_tiers.get_tier(new_tier_id)
+    if not new_tier:
+        bot.answer_callback_query(call.id, "Такого уровня нет")
+        return
+
+    user_id = call.from_user.id
+    sub = subscriptions_db.get_subscription(user_id)
+    if not sub or not subscriptions_db.has_active_subscription(user_id):
+        bot.answer_callback_query(call.id, "Активного членства нет")
+        return
+
+    current_tier_id = sub.get("tier_id")
+    current_rank = subscription_tiers.tier_rank(current_tier_id)
+    new_rank = subscription_tiers.tier_rank(new_tier_id)
+
+    if new_rank <= current_rank:
+        bot.answer_callback_query(
+            call.id,
+            "Понижение тарифа пока настраивается — напиши в поддержку, поможем вручную",
+            show_alert=True,
+        )
+        return
+
+    if not payments.is_configured():
+        bot.answer_callback_query(call.id, "Пока недоступно")
+        _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
+        show_content(
+            call.message.chat.id, user_id,
+            f"{_shield} <b>Смена тарифа временно недоступна.</b>\n\n"
+            "Приём платежей ещё настраивается (ждём токен ЮKassa). "
+            "Загляни позже или напиши в поддержку.",
+            parse_mode="HTML",
+        )
+        return
+
+    current_tier = subscription_tiers.get_tier(current_tier_id)
+    expires_at = datetime.fromisoformat(sub["expires_at"])
+    remaining_days = max(0, (expires_at - datetime.now(expires_at.tzinfo)).days)
+
+    # Доплата = разница в годовой цене, пропорционально оставшимся дням
+    # членства. Округляем до рубля — копейки в счёте никому не нужны.
+    price_diff_per_year = new_tier["price_year"] - current_tier["price_year"]
+    prorated_price = round(price_diff_per_year * remaining_days / 365)
+
+    bot.answer_callback_query(call.id)
+
+    if prorated_price <= 0:
+        # Дней осталось так мало, что доплата вышла бы нулевой или
+        # отрицательной — не имеет смысла выставлять счёт на 0 ₽,
+        # меняем тариф сразу и бесплатно.
+        subscriptions_db.change_tier(user_id, new_tier_id, new_tier["name"])
+        analytics.log_event(user_id, call.from_user.username, "tier_switched_free", new_tier["name"])
+        _diamond = f'<tg-emoji emoji-id="{emoji_ids.DIAMOND}">💎</tg-emoji>'
+        show_content(
+            call.message.chat.id, user_id,
+            f"{_diamond} <b>Тариф изменён на «{new_tier['name']}»</b> — "
+            f"осталось слишком мало дней до конца членства, доплата не потребовалась.",
+            parse_mode="HTML",
+        )
+        return
+
+    sent = payments.send_tier_switch_invoice(bot, call.message.chat.id, user_id, new_tier, prorated_price)
+    if not sent:
+        analytics.log_event(user_id, call.from_user.username, "tier_switch_invoice_failed", new_tier["name"])
+        _shield = f'<tg-emoji emoji-id="{emoji_ids.SHIELD}">🛡</tg-emoji>'
+        show_content(
+            call.message.chat.id, user_id,
+            f"{_shield} <b>Не получилось выставить счёт.</b>\n\n"
+            "Попробуй ещё раз чуть позже или напиши в поддержку.",
+            parse_mode="HTML",
+        )
+        return
+
+    analytics.log_event(user_id, call.from_user.username, "tier_switch_invoice_sent", new_tier["name"])
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "my_subscription")

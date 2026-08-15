@@ -81,6 +81,62 @@ def parse_membership_payload(payload: str) -> tuple[int, int] | None:
         return None
 
 
+def build_tier_switch_payload(telegram_id: int, new_tier_id: int) -> str:
+    """
+    Аналог build_membership_payload, но для доплаты при смене тарифа
+    (апгрейда) — используем отдельный префикс "tierswitch", чтобы
+    handle_successful_payment мог различить обычное вступление и смену
+    уровня в рамках уже активного членства (там разная логика: новое
+    вступление ставит started_at/expires_at заново, смена уровня —
+    сохраняет прежний срок, см. subscriptions_db.change_tier).
+    """
+    return f"tierswitch:{telegram_id}:{new_tier_id}"
+
+
+def parse_tier_switch_payload(payload: str) -> tuple[int, int] | None:
+    parts = payload.split(":")
+    if len(parts) != 3 or parts[0] != "tierswitch":
+        return None
+    try:
+        return int(parts[1]), int(parts[2])
+    except ValueError:
+        return None
+
+
+def send_tier_switch_invoice(bot, chat_id: int, telegram_id: int, new_tier: dict, prorated_price: int) -> bool:
+    """
+    Счёт на ДОПЛАТУ при апгрейде на более высокий уровень в рамках уже
+    активного членства — прежний срок действия сохраняется, платим
+    только разницу за оставшиеся дни (см. main.py, handle_tier_switch,
+    там же расчёт prorated_price).
+    """
+    if not is_configured():
+        logger.warning("Смена тарифа недоступна: YOOKASSA_PROVIDER_TOKEN не задан")
+        return False
+
+    payload = build_tier_switch_payload(telegram_id, new_tier["id"])
+    amount_kopecks = prorated_price * 100
+
+    try:
+        bot.send_invoice(
+            chat_id,
+            title=f"Смена тарифа — {new_tier['name']}",
+            description=f"Доплата за переход на уровень «{new_tier['name']}» "
+                        f"до конца текущего срока членства.",
+            invoice_payload=payload,
+            provider_token=YOOKASSA_PROVIDER_TOKEN,
+            currency=CURRENCY,
+            prices=[LabeledPrice(label=f"Доплата до «{new_tier['name']}»", amount=amount_kopecks)],
+            start_parameter=f"tierswitch-{new_tier['id']}",
+        )
+        logger.info("Счёт на смену тарифа отправлен: telegram_id=%s new_tier_id=%s доплата=%s ₽",
+                     telegram_id, new_tier["id"], prorated_price)
+        return True
+    except Exception as e:
+        logger.error("Не удалось отправить счёт на смену тарифа telegram_id=%s: %s", telegram_id, e)
+        return False
+
+
 def send_membership_invoice(bot, chat_id: int, telegram_id: int, tier: dict, discount_percent: int = 0) -> bool:
     """
     Показывает пользователю счёт на оплату членства через Telegram Payments.

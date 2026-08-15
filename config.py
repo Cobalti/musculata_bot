@@ -57,3 +57,20 @@ _channel_id = os.environ.get("ORDER_CHANNEL_ID")
 _chat_id = os.environ.get("ORDER_CHAT_ID")
 ORDER_CHANNEL_ID = int(_channel_id) if _channel_id else None
 ORDER_CHAT_ID = int(_chat_id) if _chat_id else None
+
+# ---------- Telegram: webhook-режим вместо polling ----------
+# Раньше бот сам постоянно спрашивал Telegram "есть что-то новое?"
+# (polling) — это создавало класс проблем (409 Conflict при дублях
+# процессов, "query is too old" при нехватке потоков под нагрузкой).
+# В webhook-режиме Telegram сам стучится к нам по HTTPS, когда есть
+# новое сообщение — нагрузка обрабатывается тем же gunicorn с несколькими
+# воркерами, что уже держит вебхуки сайта, без отдельного пула потоков.
+#
+# PUBLIC_WEBHOOK_URL — публичный адрес бота, тот же самый, что уже даём
+# Фёдору (https://bot.mashinabodystore.ru), без слэша на конце.
+# TELEGRAM_WEBHOOK_SECRET — сгенерировать самостоятельно (как раньше
+# делали для X_WP_SECRET, командой openssl rand -base64 32) — Telegram
+# присылает его обратно в заголовке при каждом апдейте, так бот
+# проверяет, что запрос реально от Telegram, а не подделка.
+PUBLIC_WEBHOOK_URL = os.environ.get("PUBLIC_WEBHOOK_URL", "").rstrip("/")
+TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
